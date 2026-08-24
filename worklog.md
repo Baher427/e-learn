@@ -2743,3 +2743,64 @@ Stage Summary:
 - ✅ Vercel: كل شيء جاهز للنشر بنقرة واحدة عبر زر "Deploy with Vercel" في README؛ متغيرات البيئة موثّقة في DEPLOYMENT.md.
 - ⚠️ لم يُعطَ Vercel token، لذا النشر نفسه يحتاج ضغطة زر من المستخدم على https://vercel.com/new مع لصق متغيرات البيئة من DEPLOYMENT.md.
 - 🔑 بيانات دخول جاهزة في Supabase: admin / admin123456، student / student123.
+
+---
+Task ID: 13
+Agent: main (Z.ai Code)
+Task: النشر الحقيقي على Vercel — ربط مستودع GitHub بـ Vercel، ضبط متغيرات البيئة، النشر، اختبار الموقع حيّاً.
+
+Work Log:
+- تحقق من صحة توكن Vercel عبر `GET /v2/user`: username=`baher427`, defaultTeam=`team_CAMjLBivuMZom3x2U1d1fCmj`, خطة hobby, GitHub integration مفعّلة.
+- استعراض المشاريع الحالية: bero, hodor-pro, mental-math, level4-math-exam. لا يوجد مشروع اسمه `e-learn`.
+- إنشاء مشروع Vercel جديد عبر REST API: `POST /v1/projects?teamId=...` مع body `{name:"e-learn", framework:"nextjs", buildCommand:"prisma generate && next build", installCommand:"bun install", gitRepository:{type:"github",repo:"e-learn",ref:"main"}}`. 
+  - النتيجة: project id = `prj_RBG18UOS6BwGgNvADeOcg1ph1Jxl`, linked to GitHub repo `Baher427/e-learn` (repoId 1344752281, productionBranch=main, gitCredentialId=`cred_0cb6d1faa121a82390d8d546697c7a41354de61a`).
+- إضافة 10 متغيرات بيئة عبر `POST /v1/projects/{id}/env?teamId=...` (one per var, target متعدد البيئات):
+  - `DATABASE_URL` (Supabase pooler transaction mode, port 6543) → production+preview
+  - `DIRECT_URL` (Supabase pooler session mode, port 5432) → production+preview
+  - `JWT_SECRET` → production+preview+development
+  - `NEXT_PUBLIC_APP_NAME="e-learn"` → production+preview+development
+  - `NEXT_PUBLIC_BASE_URL="https://e-learn-baher427s-projects.vercel.app"` → production (initial value was `e-learn.vercel.app`, صُحِّح لاحقاً إلى الرابط الحقيقي عبر PATCH /v9/projects/{id}/env/{envId})
+  - `NEXT_PUBLIC_SOCKET_PORT="3003"` → production+preview+development
+  - `SUPABASE_URL="https://zqaqaiaebfrqrrkgfkof.supabase.co"` → all
+  - `SUPABASE_SERVICE_ROLE_KEY` → all (server-only JWT)
+  - `SUPABASE_ANON_KEY` → all (public JWT)
+  - `EMAIL_FROM="e-learn <onboarding@resend.dev>"` → all
+- تشغيل النشر: `POST /v13/deployments?teamId=...` with body `{name:"e-learn", project:"prj_...", target:"production", gitSource:{type:"github",org:"Baher427",repo:"e-learn",ref:"main"}, source:"api-trigger-git-deploy"}`.
+  - النتيجة: deployment id=`dpl_5nfX6aMvnravGzmexdB6g46vsov1`, readyState=INITIALIZING ثم BUILDING ثم READY في ~48 ثانية.
+  - Aliases: 
+    - `e-learn-git-main-baher427s-projects.vercel.app` (branch alias)
+    - `e-learn-baher427s-projects.vercel.app` (production team alias) ← هذا هو رابط الإنتاج الفعلي
+    - `e-learn-psi-green.vercel.app` (auto-assigned unique subdomain)
+- اكتشفت أن SSO Protection مفعّل افتراضياً على المشاريع الجديدة (`ssoProtection.deploymentType="all_except_custom_domains"`)، فاعترض الطلبات العامة بـ 302 redirect إلى Vercel SSO screen + Set-Cookie `_vercel_sso_nonce`.
+- التعطيل: `PATCH /v1/projects/{id}` with body `{ssoProtection:null, passwordProtection:null}` → أعاد `{name,ssoProtection:null,passwordProtection:null,deploymentProtection:null}`. الموقع صار متاحاً للعامة.
+- اختبار end-to-end بالـ curl على `https://e-learn-baher427s-projects.vercel.app`:
+  1. `GET /` → HTTP 200, 17085 bytes, title="منصة e-learn | روّاد الحساب الذهني وتنمية الذكاء"
+  2. `GET /api/auth/me` (بدون كوكي) → HTTP 401 + `{"status":"error","message":"يجب تسجيل الدخول"}`
+  3. `POST /api/auth/login` (admin/admin123456) → HTTP 200 + `Set-Cookie: elearn_session=...; Secure; HttpOnly; SameSite=none`
+  4. `GET /api/auth/me` (مع الكوكي) → HTTP 200 + `{user:{username:"admin",role:"admin",status:"approved",level:10},unreadNotifications:1}` (الترحيب من البذرة)
+- اختبار student login (student/student123) → HTTP 200 + `{user:{username:"student",role:"student",level:3,trainer:"أ. أحمد محمد"}}`
+- اختبار UI عبر Agent Browser على الرابط الحيّ:
+  - لا page errors، لا console errors، لا hydration mismatch warnings.
+  - اللوحة الإدارية (admin): المستخدمون / المدرّبون / الساحة الحية / طلبات السحب / الإشعارات / الامتحانات / الإحصائيات، جدول المستخدمين يعرض الطالب التجريبي + المدرّب أحمد محمد + 30 يوم + نشط (كل البيانات من Supabase Postgres على الإنتاج).
+  - لوحة الطالب: مرحباً طالب، إحصائياتي / المتصدّرون / محفظتي / الإشعارات (1) / ملفي / خروج، 4 ألعاب (الجمع والطرح، الضرب، القسمة، الأباكوس)، ساحة المعارك، مولّد الامتحانات، toast "تم تسجيل الدخول بنجاح".
+  - الـ footer: position=static مع class `mt-auto glass border-t border-[var(--glass-border)]` داخل wrapper `<div class="relative min-h-screen flex flex-col">` ← ينطبق عليه قاعدة الـ sticky footer: في الصفحات القصيرة يلصق بأسفل الـ viewport، وفي الصفحات الطويلة يُدفع طبيعياً للأسفل. تم التحقق من هذا على viewport 1280×800 (body=1880px → footer عند y=1802) و mobile 375×812 (body=2962px → footer عند y=2856).
+- لقطة شاشة موثّقة: `/tmp/e-learn-live-student.png` (166KB).
+- إعدادات Vercel النهائية: nodeVersion=24.x, framework=nextjs, installCommand="bun install", buildCommand="prisma generate && next build" (من vercel.json), autoAssignCustomDomains=true, git repo linked (auto-deploy on every push to main).
+- النشر الحالي معطّل Push Protection/SSO Protection — الموقع متاح للعامة بدون كلمة مرور Vercel.
+
+Stage Summary:
+- ✅ Vercel project `e-learn` (id `prj_RBG18UOS6BwGgNvADeOcg1ph1Jxl`) منشأ ومرتبط بـ GitHub repo `Baher427/e-learn` على فرع `main`.
+- ✅ 10 متغيرات بيئة مرفوعة على Vercel (DATABASE_URL, DIRECT_URL, JWT_SECRET, NEXT_PUBLIC_APP_NAME, NEXT_PUBLIC_BASE_URL, NEXT_PUBLIC_SOCKET_PORT, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, EMAIL_FROM).
+- ✅ النشر الإنتاجي جاهز: `https://e-learn-baher427s-projects.vercel.app` (deployment id `dpl_5nfX6aMvnravGzmexdB6g46vsov1`, readyState=READY, target=production).
+- ✅ GitHub auto-deploy مفعّل: أي push جديد إلى `main` سيُطلق نشراً تلقائياً.
+- ✅ SSO Protection معطّل → الموقع متاح للعامة.
+- ✅ اختبار curl: `/` 200، `/api/auth/me` 401→200 بعد login admin/student، Set-Cookie `SameSite=none; Secure; HttpOnly`.
+- ✅ اختبار Agent Browser: لا أخطاء، اللوحات (admin+student) تُحمّل بالكامل، البيانات تُجلب من Supabase Postgres حيّاً، الـ sticky footer مطابق لقواعد UI/UX.
+- 🔑 بيانات دخول جاهزة: admin/admin123456 (مدير)، student/student123 (طالب، level 3, trainer "أ. أحمد محمد").
+- 🔗 روابط:
+  - الموقع: https://e-learn-baher427s-projects.vercel.app
+  - GitHub repo: https://github.com/Baher427/e-learn
+  - Vercel dashboard: https://vercel.com/baher427s-projects/e-learn
+  - Supabase project: https://supabase.com/dashboard/project/zqaqaiaebfrqrrkgfkof
+  - Deployment inspector: https://vercel.com/baher427s-projects/e-learn/5nfX6aMvnravGzmexdB6g46vsov1
+- ⚠️ ملاحظة: خدمة socket.io (PVP realtime) على المنفذ 3003 تعمل حالياً فقط في الساندبوكس المحلي؛ على Vercel (serverless) لا توجد عملية طويلة الأمد لاستضافة socket.io. لتفعيل ساحة المعارك الحية على الإنتاج، يجب نشر الـ mini-service منفصلاً على منصة تدعم العمليات الطويلة مثل Railway أو Fly.io، ثم ضبط `NEXT_PUBLIC_SOCKET_PORT` والـ Caddy gateway لتمرير `?XTransformPort=` إلى ذلك الـ host. باقي الميزات (تدريب، امتحانات، متصدرون، محفظة، إشعارات، ملف، لوحة إدارة) تعمل بالكامل على Vercel لأنها REST APIs.
