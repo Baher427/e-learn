@@ -57,3 +57,12 @@ upload/
 /upload/
 .zscripts/
 agent-ctx/
+
+# Local-only sandbox artifacts (not part of the app)
+/skills/
+/tool-results/
+/download/
+/tests/
+/agent-ctx/
+/.zscripts/
+/start-dev.sh
