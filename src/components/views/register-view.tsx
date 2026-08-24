@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Brain, ArrowRight, ArrowLeft, CheckCircle2, Mail, User, Phone, Lock, Loader2, Check, X } from "lucide-react";
 import { toast } from "sonner";
@@ -29,8 +28,6 @@ export function RegisterView() {
 
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpCode, setOtpCode] = useState("");
   const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null);
 
   const [form, setForm] = useState({
@@ -57,36 +54,10 @@ export function RegisterView() {
     setUsernameAvailable(j.status === "success");
   };
 
-  const sendOtp = async () => {
-    if (!form.email) { toast.error("الرجاء إدخال البريد الإلكتروني"); return; }
-    setLoading(true);
-    try {
-      const res = await fetch("/api/auth/otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: form.email, purpose: "register" }),
-      });
-      const j = await res.json();
-      if (j.status === "success") {
-        setOtpSent(true);
-        toast.success(`تم إرسال الرمز إلى ${j.data.maskedEmail}`);
-        // Dev/no-email setups: API returns the code inline (devCode) so
-        // registration stays testable without a mail provider.
-        const devCode: string | undefined = j.data?.devCode;
-        if (devCode) {
-          setOtpCode(devCode);
-          toast.info(`وضع التطوير — الرمز: ${devCode}`, { duration: 10_000 });
-        }
-      }
-      else toast.error(j.message ?? "فشل الإرسال");
-    } catch { toast.error("خطأ في الاتصال"); }
-    finally { setLoading(false); }
-  };
-
   const next = () => {
     if (step === 0) {
       if (!form.username || !form.email || !form.phone) { toast.error("الرجاء إكمال الحقول"); return; }
-      if (!otpSent || otpCode.length < 6) { toast.error("الرجاء طلب رمز التحقق وإدخاله (6 أرقام)"); return; }
+      if (form.username.length < 4) { toast.error("اسم المستخدم 4 أحرف على الأقل"); return; }
     }
     if (step === 1 && !form.trainerId) { toast.error("الرجاء اختيار مدرّب"); return; }
     if (step === 2 && (!form.studentName || !form.level)) { toast.error("الرجاء إدخال الاسم والمستوى"); return; }
@@ -102,7 +73,7 @@ export function RegisterView() {
       const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, otpCode }),
+        body: JSON.stringify(form),
       });
       const j = await res.json();
       if (j.status === "success") {
@@ -164,24 +135,11 @@ export function RegisterView() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="r-email">البريد الإلكتروني</Label>
-                  <Input id="r-email" type="email" value={form.email} onChange={(e) => { update("email", e.target.value); setOtpSent(false); }} className="glass-input" placeholder="you@example.com" />
+                  <Input id="r-email" type="email" value={form.email} onChange={(e) => update("email", e.target.value)} className="glass-input" placeholder="you@example.com" />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="r-phone">رقم الهاتف</Label>
                   <Input id="r-phone" value={form.phone} onChange={(e) => update("phone", e.target.value.replace(/\D/g, "").slice(0, 11))} className="glass-input font-mono" placeholder="01XXXXXXXXX" dir="ltr" />
-                </div>
-                <div className="space-y-2 rounded-xl border border-[var(--glass-border)] bg-[var(--input)] p-4">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="r-otp">رمز التحقق</Label>
-                    <Button type="button" size="sm" variant="outline" onClick={sendOtp} disabled={loading || !form.email}>{otpSent ? "إعادة الإرسال" : "إرسال الرمز"}</Button>
-                  </div>
-                  <InputOTP value={otpCode} onChange={(v) => setOtpCode(v)} maxLength={6}>
-                    <InputOTPGroup dir="ltr">
-                      <InputOTPSlot index={0} /><InputOTPSlot index={1} /><InputOTPSlot index={2} />
-                      <InputOTPSlot index={3} /><InputOTPSlot index={4} /><InputOTPSlot index={5} />
-                    </InputOTPGroup>
-                  </InputOTP>
-                  {otpSent && <p className="text-xs text-success">تم إرسال رمز 6 أرقام إلى بريدك. تحقق من صندوق الوارد.</p>}
                 </div>
               </motion.div>
             )}

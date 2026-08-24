@@ -10,7 +10,7 @@
  * `/api/pvp/invite?action=check_incoming` every 1.5s for incoming invites.
  *
  * The wallet tab delegates to the standalone WalletView via setView("wallet")
- * to avoid duplicating OTP + withdrawal logic (out of scope).
+ * to avoid duplicating withdrawal logic (out of scope).
  */
 
 import { useEffect, useMemo, useState } from "react";

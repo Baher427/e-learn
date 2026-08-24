@@ -1,18 +1,15 @@
 /**
- * Auth core — JWT (jose) + bcrypt + OTP store in DB with TTL.
+ * Auth core — JWT (jose) + bcrypt.
  * Works locally (SQLite) and in production (Supabase Postgres).
  * Sessions live in an httpOnly cookie named `elearn_session`.
  */
 import { SignJWT, jwtVerify } from 'jose'
 import bcrypt from 'bcryptjs'
-import { randomBytes } from 'crypto'
 import { db } from '@/lib/db'
 import { env, isProd } from '@/lib/env'
 
 export const SESSION_COOKIE = 'elearn_session'
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7 // 7 days
-const OTP_TTL_SECONDS = 5 * 60 // 5 minutes
-const OTP_MAX_ATTEMPTS = 5
 
 // --------------------------------------------------------------------
 // Password hashing
@@ -136,84 +133,8 @@ function decodeUnverified(token: string): SessionPayload | null {
 }
 
 // --------------------------------------------------------------------
-// OTP store (replaces PHP $_SESSION-based OTP)
-// --------------------------------------------------------------------
-
-export async function createOtp(opts: {
-  email: string
-  purpose: 'register' | 'login_force' | 'withdrawal' | 'password_reset'
-  userId?: string
-}): Promise<{ code: string; id: string }> {
-  // Invalidate previous unconsumed OTPs for same email+purpose
-  await db.otp.updateMany({
-    where: { email: opts.email.toLowerCase(), purpose: opts.purpose, consumedAt: null },
-    data: { consumedAt: new Date() },
-  })
-
-  const code = String(Math.floor(100000 + Math.random() * 900000)) // 6-digit
-  const codeHash = await bcrypt.hash(code, 10)
-  const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000)
-
-  const otp = await db.otp.create({
-    data: {
-      email: opts.email.toLowerCase(),
-      purpose: opts.purpose,
-      codeHash,
-      expiresAt,
-      userId: opts.userId ?? null,
-    },
-  })
-  return { code, id: otp.id }
-}
-
-export async function verifyOtp(opts: {
-  email: string
-  purpose: 'register' | 'login_force' | 'withdrawal' | 'password_reset'
-  code: string
-}): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const otp = await db.otp.findFirst({
-    where: {
-      email: opts.email.toLowerCase(),
-      purpose: opts.purpose,
-      consumedAt: null,
-      expiresAt: { gt: new Date() },
-    },
-    orderBy: { createdAt: 'desc' },
-  })
-
-  if (!otp) return { ok: false, reason: 'انتهت صلاحية الرمز أو لم يُرسل بعد' }
-  if (otp.attempts >= OTP_MAX_ATTEMPTS) {
-    await db.otp.update({ where: { id: otp.id }, data: { consumedAt: new Date() } })
-    return { ok: false, reason: 'تجاوزت عدد المحاولات المسموح، اطلب رمزاً جديداً' }
-  }
-
-  const match = await bcrypt.compare(opts.code, otp.codeHash)
-  if (!match) {
-    await db.otp.update({
-      where: { id: otp.id },
-      data: { attempts: { increment: 1 } },
-    })
-    return { ok: false, reason: 'الرمز غير صحيح' }
-  }
-
-  await db.otp.update({ where: { id: otp.id }, data: { consumedAt: new Date() } })
-  return { ok: true }
-}
-
-// --------------------------------------------------------------------
 // Misc helpers
 // --------------------------------------------------------------------
-
-export function generateDeviceToken(): string {
-  return randomBytes(32).toString('hex')
-}
-
-export function maskEmail(email: string): string {
-  const [user, domain] = email.split('@')
-  if (!domain) return email
-  const visible = user.slice(0, Math.min(3, user.length))
-  return `${visible}${'•'.repeat(4)}@${domain}`
-}
 
 /** Returns the current user record (with trainer join) or null. */
 export async function getCurrentUser() {

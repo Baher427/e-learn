@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import {
   Select,
   SelectContent,
@@ -16,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowRight, Wallet as WalletIcon, Banknote, Send, Clock, Check, X, Lock } from "lucide-react";
+import { ArrowRight, Wallet as WalletIcon, Banknote, Send, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 
@@ -39,33 +38,14 @@ export function WalletView() {
   const [points, setPoints] = useState("");
   const [method, setMethod] = useState("vodafone_cash");
   const [account, setAccount] = useState("");
-  const [otpCode, setOtpCode] = useState("");
-  const [otpModal, setOtpModal] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["wallet"],
     queryFn: async () => {
-      const res = await fetch("/api/wallet", { credentials: "same-origin" });
+      const res = await fetch("/api/wallet/data", { credentials: "same-origin" });
       const j = await res.json();
       return j.data;
     },
-  });
-
-  const otpMut = useMutation({
-    mutationFn: async () => {
-      const res = await fetch("/api/wallet/otp", {
-        method: "POST",
-        credentials: "same-origin",
-      });
-      const j = await res.json();
-      if (j.status !== "success") throw new Error(j.message);
-      return j.data;
-    },
-    onSuccess: (d) => {
-      setOtpModal(true);
-      toast.success(`تم إرسال الرمز إلى ${d.maskedEmail}`);
-    },
-    onError: (e: any) => toast.error(e.message),
   });
 
   const withdrawMut = useMutation({
@@ -78,7 +58,6 @@ export function WalletView() {
           points: parseInt(points),
           method,
           account,
-          otpCode,
         }),
       });
       const j = await res.json();
@@ -89,8 +68,6 @@ export function WalletView() {
       toast.success("تم تسجيل طلبك بنجاح!");
       setPoints("");
       setAccount("");
-      setOtpCode("");
-      setOtpModal(false);
       qc.invalidateQueries({ queryKey: ["wallet"] });
     },
     onError: (e: any) => toast.error(e.message),
@@ -102,7 +79,7 @@ export function WalletView() {
       toast.error("الرجاء إكمال كل الحقول");
       return;
     }
-    otpMut.mutate();
+    withdrawMut.mutate();
   };
 
   if (isLoading) {
@@ -216,11 +193,11 @@ export function WalletView() {
             </div>
             <Button
               type="submit"
-              disabled={otpMut.isPending || !data?.systemStatus}
+              disabled={withdrawMut.isPending || !data?.systemStatus}
               className="gradient-primary w-full text-white"
             >
               <Send className="h-4 w-4" />
-              متابعة (إرسال رمز التأكيد)
+              {withdrawMut.isPending ? "جارٍ المعالجة…" : "طلب السحب"}
             </Button>
           </form>
         </Card>
@@ -267,49 +244,6 @@ export function WalletView() {
         )}
       </Card>
 
-      {/* OTP Modal */}
-      {otpModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <Card className="glass-strong w-full max-w-md border border-[var(--glass-border)] p-6 text-center">
-            <Lock className="mx-auto mb-3 h-10 w-10 text-primary" />
-            <h3 className="mb-2 text-lg font-bold">رمز التأكيد</h3>
-            <p className="mb-4 text-sm text-muted-foreground">
-              أدخل الرمز المُرسل إلى بريدك الإلكتروني
-            </p>
-            <InputOTP
-              value={otpCode}
-              onChange={setOtpCode}
-              maxLength={6}
-              className="mb-4"
-            >
-              <InputOTPGroup dir="ltr">
-                <InputOTPSlot index={0} />
-                <InputOTPSlot index={1} />
-                <InputOTPSlot index={2} />
-                <InputOTPSlot index={3} />
-                <InputOTPSlot index={4} />
-                <InputOTPSlot index={5} />
-              </InputOTPGroup>
-            </InputOTP>
-            <div className="mt-4 flex gap-2">
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={() => setOtpModal(false)}
-              >
-                إلغاء
-              </Button>
-              <Button
-                disabled={otpCode.length < 6 || withdrawMut.isPending}
-                className="gradient-primary flex-1 text-white"
-                onClick={() => withdrawMut.mutate()}
-              >
-                {withdrawMut.isPending ? "جارٍ المعالجة…" : "تأكيد"}
-              </Button>
-            </div>
-          </Card>
-        </div>
-      )}
     </div>
   );
 }

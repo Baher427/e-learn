@@ -71,7 +71,6 @@ model User {
   currentStatus String   @default("idle") // "idle" | "playing"
   lastActivity  DateTime @default(now())
   aiAttemptsCount Int    @default(0)
-  deviceToken    String?  // hash of IP+UA — device-conflict detection (تأمين الحساب)
   aiLastDate    DateTime?
   lastDailyBonus DateTime?
   createdAt     DateTime @default(now())
@@ -91,7 +90,6 @@ model User {
   notifications        Notification[] // when targeted
   notificationReads    NotificationRead[]
   fcmTokens            FcmToken[]
-  otps                 Otp[]
   auditLogs           AuditLog[]      @relation("actor")
   auditLogTargets     AuditLog[]      @relation("target")
   withdrawalsDecided   WithdrawalRequest[] @relation("decidedByUser")
@@ -275,27 +273,6 @@ model FcmToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
-}
-
-// --------------------------------------------------------------------
-// OTP store (replaces PHP $_SESSION-based OTP)
-// --------------------------------------------------------------------
-
-model Otp {
-  id        String   @id @default(cuid())
-  userId    String?
-  email     String   // canonical lowercased
-  codeHash  String   // never store plaintext
-  purpose   String   // "register" | "login_force" | "withdrawal" | "password_reset"
-  consumedAt DateTime?
-  expiresAt DateTime
-  attempts  Int      @default(0) // count of failed verifications
-  createdAt DateTime @default(now())
-
-  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([email, purpose])
-  @@index([expiresAt])
 }
 
 // --------------------------------------------------------------------
