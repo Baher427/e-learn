@@ -2804,3 +2804,39 @@ Stage Summary:
   - Supabase project: https://supabase.com/dashboard/project/zqaqaiaebfrqrrkgfkof
   - Deployment inspector: https://vercel.com/baher427s-projects/e-learn/5nfX6aMvnravGzmexdB6g46vsov1
 - ⚠️ ملاحظة: خدمة socket.io (PVP realtime) على المنفذ 3003 تعمل حالياً فقط في الساندبوكس المحلي؛ على Vercel (serverless) لا توجد عملية طويلة الأمد لاستضافة socket.io. لتفعيل ساحة المعارك الحية على الإنتاج، يجب نشر الـ mini-service منفصلاً على منصة تدعم العمليات الطويلة مثل Railway أو Fly.io، ثم ضبط `NEXT_PUBLIC_SOCKET_PORT` والـ Caddy gateway لتمرير `?XTransformPort=` إلى ذلك الـ host. باقي الميزات (تدريب، امتحانات، متصدرون، محفظة، إشعارات، ملف، لوحة إدارة) تعمل بالكامل على Vercel لأنها REST APIs.
+
+---
+Task ID: 14
+Agent: main (Z.ai Code)
+Task: إصلاح مشكلة التسجيل: "تم التسجيل بنجاح لكن لا ينتقل للصفحة الرئيسية، يبقى في صفحة الدخول".
+
+Work Log:
+- التشخيص: فحص `src/components/views/register-view.tsx` السطر 97 — كان `if (j.status === "success") { toast.success(j.data.message); setView("login"); }` أي بعد نجاح التسجيل بيتحوّل لصفحة login بدل dashboard.
+- السبب الإضافي: الـ auth context (`useQuery(["auth","me"])`) لم يكن بيعمل refetch بعد التسجيل، فحتى لو الكوكي اتسجل على السيرفر، الـ `useAuth()` بيفضّل يرجّع `null`، وأي حرس (guard) في AppShell بيشوف `user=null` وبيبقى المستخدم في صفحة landing/login.
+- تأكد إن الـ dashboard view أصلاً صمّم للتعامل مع المستخدم `pending` (السطور 29-40 من `src/components/views/dashboard-view.tsx`): بيعرض بطاقة "حسابك قيد المراجعة" مع رسالة واضحة + زر تسجيل خروج. فالـ UX الصحيح هو: register → dashboard → pending card.
+- التعديل على `src/components/views/register-view.tsx`:
+  - استيراد `useQueryClient` من `@tanstack/react-query`.
+  - في الـ component: `const qc = useQueryClient();`.
+  - في `submit()`: بعد نجاح التسجيل، `await qc.refetchQueries({ queryKey: ["auth", "me"] })` (لازم نستنى refetch لحد ما الـ auth context يلتقط الكوكي الجديد بأمان قبل ما نحوّل)، وبعدها `setView("dashboard")` بدل `setView("login")`.
+- اختبار محلي كامل عبر agent-browser (على localhost:3000):
+  - فتح صفحة التسجيل.
+  - خطوة 1 (الحساب): اسم المستخدم + بريد + هاتف + إرسال OTP. التقاط OTP من dev.log (الكود 861289).
+  - إدخال OTP.
+  - خطوة 2 (المدرّب): اختيار "أ. أحمد محمد".
+  - خطوة 3 (الهوية): الاسم الكامل + المستوى 1.
+  - خطوة 4 (الأمان): كلمة المرور.
+  - الضغط على "إنشاء الحساب" → loading → toast "تم إنشاء حسابك! سيتم تفعيله بعد موافقة الإدارة." → الانتقال لصفحة الـ dashboard.
+  - النتيجة: بطاقة "حسابك قيد المراجعة" ظهرت مع زر "تسجيل الخروج" ✓. لا page errors، لا console errors.
+- لقطة شاشة موثّقة: `/tmp/e-learn-register-fixed.png` (167KB) — تعرض البطاقة الـ pending على الـ dashboard.
+- اختبر الـ API على Supabase عبر curl: `POST /api/auth/register` (مع OTP صحيح) → HTTP 200 + `{userId, status:"pending", message:"تم إنشاء حسابك!..."}` + `Set-Cookie: elearn_session=...`. ثم `GET /api/auth/me` بذاك الكوكي → HTTP 200 + بيانات المستخدم الجديد (`status:"pending"`, `level:1`, `role:"student"`).
+- commit + push لـ GitHub: `8c04133 fix(register): navigate to dashboard after successful registration`.
+- Vercel auto-deploy من commit `8c04133`: deployment `dpl_HiBhuQWS6oeiyEgGmwuyBraEcTVH`, state=READY, على الإنتاج (`https://e-learn-baher427s-projects.vercel.app`).
+- regression check على الـ live Vercel site بعد النشر: GET / 200, /api/auth/me 401 (بدون كوكي), POST /api/auth/login 200 + Set-Cookie, GET /api/auth/me 200 (بعد login) → كل القواعد لسه شغّالة.
+
+Stage Summary:
+- ✅ المشكلة حلّت: بعد التسجيل الناجح بيتحوّل المستخدم تلقائياً لصفحة الـ dashboard (مش صفحة login) وبيشوف بطاقة "حسابك قيد المراجعة" واضحة بدل ما يفضل عالق في صفحة الترحيب.
+- ✅ الـ auth query بيتـ refetch قبل التحويل، فمفيش سباق (race) بين ضبط الكوكي وتحميل الصفحة.
+- ✅ الـ pending users بيحصلوا على UX واضح (بطاقة تنتظر موافقة الإدارة).
+- ✅ التعديل مرفوع على GitHub (`8c04133`) ومنشور على Vercel تلقائياً.
+- ✅ regression: الـ admin login وstudent login لسه شغّالين بدون أي تغيير في السلوك.
+- 🔑 للمستخدم: عشان يجرّب على الموقع الحي بنفسه، محتاج يفعّل إرسال OTP الحقيقي عبر Resend (مجاني من resend.com) ويضيف `RESEND_API_KEY` كـ env var على Vercel. بدون Resend، OTP بيتطبع بس في function logs على Vercel (مش سهل الوصول). محلياً يظهر في dev.log بسهولة.
