@@ -11,12 +11,13 @@ import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Brain, ArrowRight, ArrowLeft, CheckCircle2, Mail, User, Phone, Lock, Loader2, Check, X } from "lucide-react";
 import { toast } from "sonner";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 interface Trainer { id: string; name: string }
 
 export function RegisterView() {
   const setView = useUIStore((s) => s.setView);
+  const qc = useQueryClient();
   const { data: trainers = [] } = useQuery<Trainer[]>({
     queryKey: ["trainers"],
     queryFn: async () => {
@@ -94,8 +95,20 @@ export function RegisterView() {
         body: JSON.stringify({ ...form, otpCode }),
       });
       const j = await res.json();
-      if (j.status === "success") { toast.success(j.data.message); setView("login"); }
-      else toast.error(j.message ?? "فشل التسجيل");
+      if (j.status === "success") {
+        toast.success(j.data.message);
+        // The server just set the session cookie via Set-Cookie header.
+        // Force a refetch of /api/auth/me so the auth context picks up
+        // the new (pending) user before we navigate — otherwise the
+        // dashboard guard would still see `user === null` and bounce
+        // back to the landing view.
+        await qc.refetchQueries({ queryKey: ["auth", "me"] });
+        // Go straight to the dashboard. Pending users see a clear
+        // "حسابك قيد المراجعة" card there (dashboard-view lines 29-40).
+        setView("dashboard");
+      } else {
+        toast.error(j.message ?? "فشل التسجيل");
+      }
     } catch { toast.error("خطأ في الاتصال"); }
     finally { setLoading(false); }
   };
