@@ -1,0 +1,402 @@
+   400→                  </div>
+   401→                  <div class="step-item" data-step-target="2">
+   402→                       <div class="step-icon">
+   403→                           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+   404→                       </div>
+   405→                       <span>ضرب</span>
+   406→                  </div>
+   407→                  <div class="step-item" data-step-target="3">
+   408→                       <div class="step-icon">
+   409→                           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+   410→                       </div>
+   411→                       <span>قسمة</span>
+   412→                  </div>
+   413→                  <div class="step-item" data-step-target="4">
+   414→                       <div class="step-icon">
+   415→                           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L21.75 5.25l-.813 2.846a4.5 4.5 0 00-3.09 3.09L15 12l2.846.813a4.5 4.5 0 003.09 3.09L21.75 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L18.25 12zM12 15.75a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z" /></svg>
+   416→                       </div>
+   417→                       <span>تخيل</span>
+   418→                  </div>
+   419→             </div>
+   420→       </div>
+   421→        
+   422→        <form id="examSettingsForm" novalidate>
+   423→            <div id="wizard-steps">
+   424→                <!-- Step 1: General Settings -->
+   425→                <div class="wizard-step active" data-step="0">
+   426→                    <div class="wizard-step-header">
+   427→                        <div class="icon"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10.343 3.94c.09-.542.56-1.026 1.11-1.228.55-.203 1.182.025 1.555.518l2.35 3.016a1.5 1.5 0 002.32 0l2.35-3.016a1.5 1.5 0 011.555-.518c.55.202 1.02.686 1.11 1.228l.223 1.343a1.5 1.5 0 001.217 1.378c.616.143 1.02.734 1.02 1.378V10.5a1.5 1.5 0 01-1.5 1.5h-2.143a1.5 1.5 0 00-1.217 1.378l-.223 1.343a1.5 1.5 0 01-1.11 1.228c-.55.203-1.182-.025-1.555-.518l-2.35-3.016a1.5 1.5 0 00-2.32 0l-2.35 3.016a1.5 1.5 0 01-1.555.518c-.55-.202-1.02-.686-1.11-1.228l-.223-1.343a1.5 1.5 0 00-1.217-1.378H3.001a1.5 1.5 0 01-1.5-1.5V10.5c0-.644.404-1.235 1.02-1.378a1.5 1.5 0 001.217-1.378l.223-1.343z" /><path stroke-linecap="round" stroke-linejoin="round" d="M12 15.75a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z" /></svg></div>
+   428→                        <h5>الإعدادات العامة</h5>
+   429→                    </div>
+   430→                    <div class="row g-4">
+   431→                        <div class="col-md-6">
+   432→                            <label for="examTitle" class="form-label">عنوان ورقة الامتحان (انجليزي فقط)</label>
+   433→                            <input type="text" class="form-control" id="examTitle" value="Exam" required pattern="[A-Za-z0-9\s]+">
+   434→                            <div class="invalid-feedback">الرجاء إدخال عنوان للامتحان بالحروف الإنجليزية فقط.</div>
+   435→                        </div>
+   436→                        <div class="col-md-6">
+   437→                            <label for="columnsCount" class="form-label">عدد الأعمدة في الصفحة</label>
+   438→                            <select id="columnsCount" class="form-select" required>
+   439→                                <option value="" disabled>اختر عدد الأعمدة...</option>
+   440→                                <option value="5">5</option>
+   441→                                <option value="10" selected>10</option>
+   442→                            </select>
+   443→                            <div class="invalid-feedback">الرجاء اختيار عدد الأعمدة.</div>
+   444→                        </div>
+   445→                    </div>
+   446→                </div>
+   447→
+   448→                <!-- Step 2: Addition/Subtraction -->
+   449→                <div class="wizard-step" data-step="1">
+   450→                    <div class="wizard-step-header">
+   451→                        <div class="icon"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg></div>
+   452→                        <h5>إعدادات الجمع والطرح</h5>
+   453→                    </div>
+   454→                     <div class="row g-4 mb-4">
+   455→                         <div class="col-md-4">
+   456→                             <label for="as_questionsCount" class="form-label">عدد الأسئلة</label>
+   457→                             <div class="input-group">
+   458→                                 <button class="btn btn-outline-secondary" type="button" data-input-id="as_questionsCount" data-action="decrement">-</button>
+   459→                                 <input type="number" class="form-control text-center" id="as_questionsCount" value="20" min="0" max="100" readonly>
+   460→                                 <button class="btn btn-outline-secondary" type="button" data-input-id="as_questionsCount" data-action="increment">+</button>
+   461→                             </div>
+   462→                         </div>
+   463→                         <div class="col-md-4">
+   464→                             <label for="as_numberLength" class="form-label">عدد الخانات</label>
+   465→                             <select id="as_numberLength" class="form-select" required>
+   466→                                 <option value="" disabled>اختر...</option>
+   467→                                 <option value="1" selected>1 (آحاد)</option>
+   468→                                 <option value="2">2 (عشرات)</option>
+   469→                                 <option value="3">3 (مئات)</option>
+   470→                                 <option value="4">4 (آلاف)</option>
+   471→                                 <option value="5">5 (عشرات الآلاف)</option>
+   472→                             </select>
+   473→                             <div class="invalid-feedback">مطلوب.</div>
+   474→                         </div>
+   475→                         <div class="col-md-4">
+   476→                             <label for="as_termsCount" class="form-label">عدد الصفوف</label>
+   477→                             <div class="input-group">
+   478→                                 <button class="btn btn-outline-secondary" type="button" data-input-id="as_termsCount" data-action="decrement">-</button>
+   479→                                 <input type="number" class="form-control text-center" id="as_termsCount" value="3" min="2" max="10" readonly>
+   480→                                 <button class="btn btn-outline-secondary" type="button" data-input-id="as_termsCount" data-action="increment">+</button>
+   481→                             </div>
+   482→                         </div>
+   483→                     </div>
+   484→                     <div class="row g-3">
+   485→                         <div class="col-md-12">
+   486→                               <label class="form-label fw-bold d-block">طريقة الحل:</label>
+   487→                               <div class="btn-group w-100" role="group">
+   488→                                   <input type="radio" class="btn-check" name="solvingMethod" id="methodDirect" value="direct" autocomplete="off" required checked>
+   489→                                   <label class="btn btn-outline-primary" for="methodDirect">مباشر</label>
+   490→                                   <input type="radio" class="btn-check" name="solvingMethod" id="methodFriends5" value="friendsOf5" autocomplete="off">
+   491→                                   <label class="btn btn-outline-primary" for="methodFriends5">أصدقاء 5</label>
+   492→                                   <input type="radio" class="btn-check" name="solvingMethod" id="methodFriends10" value="friendsOf10" autocomplete="off">
+   493→                                   <label class="btn btn-outline-primary" for="methodFriends10">أصدقاء 10</label>
+   494→                                   <input type="radio" class="btn-check" name="solvingMethod" id="methodFriends5And10" value="friendsOf5And10" autocomplete="off">
+   495→                                   <label class="btn btn-outline-primary" for="methodFriends5And10">أصدقاء 5 و 10</label>
+   496→                               </div>
+   497→                               <div id="solvingMethodError" class="d-none invalid-feedback mt-2" style="text-align: center;">الرجاء اختيار طريقة للحل.</div>
+   498→                         </div>
+   499→                     </div>
+   500→                </div>
+   501→
+   502→                <!-- Step 3: Multiplication -->
+   503→                <div class="wizard-step" data-step="2">
+   504→                    <div class="wizard-step-header">
+   505→                        <div class="icon"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg></div>
+   506→                        <h5>إعدادات الضرب</h5>
+   507→                    </div>
+   508→                    <div class="row g-3">
+   509→                         <div class="col-md-4">
+   510→                             <label for="mul_questionsCount" class="form-label">عدد الأسئلة</label>
+   511→                             <div class="input-group">
+   512→                                 <button class="btn btn-outline-secondary" type="button" data-input-id="mul_questionsCount" data-action="decrement">-</button>
+   513→                                 <input type="number" class="form-control text-center" id="mul_questionsCount" value="6" min="0" max="100" readonly>
+   514→                                 <button class="btn btn-outline-secondary" type="button" data-input-id="mul_questionsCount" data-action="increment">+</button>
+   515→                             </div>
+   516→                         </div>
+   517→                         <div class="col-md-4">
+   518→                             <label for="mul_num1Length" class="form-label">خانات الرقم الأول</label>
+   519→                             <select id="mul_num1Length" class="form-select" required>
+   520→                                 <option value="" disabled>اختر...</option>
+   521→                                 <option value="1">1</option>
+   522→                                 <option value="2" selected>2</option>
+   523→                                 <option value="3">3</option>
+   524→                             </select>
+   525→                             <div class="invalid-feedback">مطلوب.</div>
+   526→                         </div>
+   527→                         <div class="col-md-4">
+   528→                             <label for="mul_num2Length" class="form-label">خانات الرقم الثاني</label>
+   529→                             <select id="mul_num2Length" class="form-select" required>
+   530→                                 <option value="" disabled>اختر...</option>
+   531→                                 <option value="1" selected>1</option>
+   532→                                 <option value="2">2</option>
+   533→                             </select>
+   534→                             <div class="invalid-feedback">مطلوب.</div>
+   535→                         </div>
+   536→                    </div>
+   537→                </div>
+   538→
+   539→                <!-- Step 4: Division -->
+   540→                <div class="wizard-step" data-step="3">
+   541→                     <div class="wizard-step-header">
+   542→                         <div class="icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><circle cx="12" cy="7" r="2"></circle><circle cx="12" cy="17" r="2"></circle></svg></div>
+   543→                         <h5>إعدادات القسمة</h5>
+   544→                     </div>
+   545→                     <div class="row g-4 mb-4">
+   546→                        <div class="col-md-4">
+   547→                             <label for="div_questionsCount" class="form-label">عدد الأسئلة</label>
+   548→                             <div class="input-group">
+   549→                                 <button class="btn btn-outline-secondary" type="button" data-input-id="div_questionsCount" data-action="decrement">-</button>
+   550→                                 <input type="number" class="form-control text-center" id="div_questionsCount" value="6" min="0" max="100" readonly>
+   551→                                 <button class="btn btn-outline-secondary" type="button" data-input-id="div_questionsCount" data-action="increment">+</button>
+   552→                             </div>
+   553→                         </div>
+   554→                        <div class="col-md-4">
+   555→                            <label for="div_dividendLength" class="form-label">خانات المقسوم</label>
+   556→                            <select id="div_dividendLength" class="form-select" required>
+   557→                                <option value="2" selected>2 (رقمين)</option>
+   558→                                <option value="3">3 (3 أرقام)</option>
+   559→                                <option value="4">4 (4 أرقام)</option>
+   560→                            </select>
+   561→                        </div>
+   562→                        <div class="col-md-4">
+   563→                            <label for="div_divisorLength" class="form-label">خانات المقسوم عليه</label>
+   564→                            <select id="div_divisorLength" class="form-select" required>
+   565→                                <option value="1" selected>1 (رقم)</option>
+   566→                                <option value="2">2 (رقمين)</option>
+   567→                                <option value="3">3 (3 أرقام)</option>
+   568→                                <option value="4">4 (4 أرقام)</option>
+   569→                            </select>
+   570→                        </div>
+   571→                     </div>
+   572→                     <div class="row g-3">
+   573→                        <div class="col-md-12">
+   574→                             <label class="form-label fw-bold d-block">نوع الأرقام:</label>
+   575→                             <div class="btn-group w-100" role="group">
+   576→                                 <input type="radio" class="btn-check" name="div_decimalOption" id="divIntegers" value="integers" autocomplete="off" required checked>
+   577→                                 <label class="btn btn-outline-primary" for="divIntegers">أرقام صحيحة</label>
+   578→                                 <input type="radio" class="btn-check" name="div_decimalOption" id="divDecimals" value="decimals" autocomplete="off">
+   579→                                 <label class="btn btn-outline-primary" for="divDecimals">أرقام عشرية بسيطة</label>
+   580→                             </div>
+   581→                        </div>
+   582→                     </div>
+   583→                </div>
+   584→                
+   585→                <!-- Step 5: Imagination -->
+   586→                <div class="wizard-step" data-step="4">
+   587→                    <div class="wizard-step-header">
+   588→                        <div class="icon"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L21.75 5.25l-.813 2.846a4.5 4.5 0 00-3.09 3.09L15 12l2.846.813a4.5 4.5 0 003.09 3.09L21.75 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L18.25 12zM12 15.75a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z" /></svg></div>
+   589→                        <h5>إعدادات التخيل الحسابي</h5>
+   590→                    </div>
+   591→                      <div class="row g-4 mb-4">
+   592→                          <div class="col-md-4">
+   593→                              <label for="im_questionsCount" class="form-label">عدد الأسئلة</label>
+   594→                              <div class="input-group">
+   595→                                  <button class="btn btn-outline-secondary" type="button" data-input-id="im_questionsCount" data-action="decrement">-</button>
+   596→                                  <input type="number" class="form-control text-center" id="im_questionsCount" value="10" min="0" max="100" readonly>
+   597→                                  <button class="btn btn-outline-secondary" type="button" data-input-id="im_questionsCount" data-action="increment">+</button>
+   598→                              </div>
+   599→                          </div>
+   600→                          <div class="col-md-4">
+   601→                              <label for="im_numberLength" class="form-label">عدد الخانات</label>
+   602→                              <select id="im_numberLength" class="form-select" required>
+   603→                                  <option value="" disabled>اختر...</option>
+   604→                                  <option value="1" selected>1 (آحاد)</option>
+   605→                                  <option value="2">2 (عشرات)</option>
+   606→                                  <option value="3">3 (مئات)</option>
+   607→                                  <option value="4">4 (آلاف)</option>
+   608→                                  <option value="5">5 (عشرات الآلاف)</option>
+   609→                              </select>
+   610→                              <div class="invalid-feedback">مطلوب.</div>
+   611→                          </div>
+   612→                          <div class="col-md-4">
+   613→                              <label for="im_termsCount" class="form-label">عدد الصفوف</label>
+   614→                              <div class="input-group">
+   615→                                  <button class="btn btn-outline-secondary" type="button" data-input-id="im_termsCount" data-action="decrement">-</button>
+   616→                                  <input type="number" class="form-control text-center" id="im_termsCount" value="3" min="2" max="10" readonly>
+   617→                                  <button class="btn btn-outline-secondary" type="button" data-input-id="im_termsCount" data-action="increment">+</button>
+   618→                              </div>
+   619→                          </div>
+   620→                      </div>
+   621→                      <div class="row g-3">
+   622→                         <div class="col-md-12">
+   623→                              <label class="form-label fw-bold d-block">طريقة الحل:</label>
+   624→                              <div class="btn-group w-100" role="group">
+   625→                                  <input type="radio" class="btn-check" name="im_solvingMethod" id="im_methodDirect" value="direct" autocomplete="off" required checked>
+   626→                                  <label class="btn btn-outline-primary" for="im_methodDirect">مباشر</label>
+   627→                                  <input type="radio" class="btn-check" name="im_solvingMethod" id="im_methodFriends5" value="friendsOf5" autocomplete="off">
+   628→                                  <label class="btn btn-outline-primary" for="im_methodFriends5">أصدقاء 5</label>
+   629→                                  <input type="radio" class="btn-check" name="im_solvingMethod" id="im_methodFriends10" value="friendsOf10" autocomplete="off">
+   630→                                  <label class="btn btn-outline-primary" for="im_methodFriends10">أصدقاء 10</label>
+   631→                                  <input type="radio" class="btn-check" name="im_solvingMethod" id="im_methodFriends5And10" value="friendsOf5And10" autocomplete="off">
+   632→                                  <label class="btn btn-outline-primary" for="im_methodFriends5And10">أصدقاء 5 و 10</label>
+   633→                              </div>
+   634→                              <div id="im_solvingMethodError" class="d-none invalid-feedback mt-2" style="text-align: center;">الرجاء اختيار طريقة للحل.</div>
+   635→                         </div>
+   636→                      </div>
+   637→                </div>
+   638→
+   639→            </div>
+   640→            
+   641→            <div id="formError" class="text-danger mt-2 text-center" role="alert"></div>
+   642→
+   643→            <div class="wizard-footer d-flex justify-content-between">
+   644→                <button type="button" class="btn btn-outline-secondary" id="prevBtn">السابق</button>
+   645→                <button type="button" class="btn btn-outline-secondary" id="skipBtn">تخطي هذا القسم</button>
+   646→                <button type="button" class="btn btn-primary" id="nextBtn">التالي</button>
+   647→            </div>
+   648→        </form>
+   649→    </div>
+   650→
+   651→    <!-- Success Screen -->
+   652→    <div class="success-container text-center" style="display: none;">
+   653→        <div class="success-icon mb-3">
+   654→            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+   655→                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+   656→            </svg>
+   657→        </div>
+   658→        <h2 class="mb-2" style="color: var(--text-dark); font-weight: 700;">تم إعداد الامتحان بنجاح!</h2>
+   659→        <p class="text-muted mb-4" id="examSummary">تم إنشاء امتحان يحتوي على X سؤال.</p>
+   660→        <div class="d-grid gap-3 d-sm-flex justify-content-sm-center">
+   661→            <a href="../dashboard.php" class="btn btn-secondary btn-lg px-4">العودة للرئيسية</a>
+   662→            <button type="button" class="btn btn-primary btn-lg px-4 gap-3" id="previewAndDownloadBtn">
+   663→                معاينة وتحميل
+   664→            </button>
+   665→            <button type="button" class="btn btn-outline-secondary btn-lg px-4" id="createNewExamBtn">إنشاء امتحان جديد</button>
+   666→        </div>
+   667→    </div>
+   668→
+   669→
+   670→    <!-- Exam Preview Modal -->
+   671→    <div class="modal fade" id="examPreviewModal" tabindex="-1" aria-labelledby="examPreviewModalLabel" aria-hidden="true">
+   672→      <div class="modal-dialog modal-xl">
+   673→        <div class="modal-content">
+   674→          <div class="modal-header">
+   675→            <h5 class="modal-title" id="examPreviewModalLabel">معاينة الامتحان</h5>
+   676→            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+   677→          </div>
+   678→          <div class="modal-body">
+   679→               <iframe id="pdfPreviewFrame"></iframe>
+   680→          </div>
+   681→          <div class="modal-footer">
+   682→            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+   683→            <button type="button" class="btn btn-primary" id="confirmAndDownloadBtn">تأكيد وتحميل</button>
+   684→          </div>
+   685→        </div>
+   686→      </div>
+   687→    </div>
+   688→    
+   689→    
+   690→
+   691→
+   692→    <!-- jsPDF Libraries -->
+   693→    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+   694→    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+   695→    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+   696→
+   697→    <!-- Main Logic Script -->
+   698→    <script>
+   699→    document.addEventListener('DOMContentLoaded', function() {
+   700→        // --- Wizard Navigation Elements ---
+   701→        const steps = document.querySelectorAll('.wizard-step');
+   702→        const nextBtn = document.getElementById('nextBtn');
+   703→        const prevBtn = document.getElementById('prevBtn');
+   704→        const skipBtn = document.getElementById('skipBtn');
+   705→        const progressBar = document.getElementById('progress-line');
+   706→        const stepItems = document.querySelectorAll('.step-item');
+   707→        const skipToast = new bootstrap.Toast(document.getElementById('skipToast'));
+   708→
+   709→        let currentStep = 0;
+   710→        let skippedSteps = [];
+   711→        
+   712→        // --- Wizard Logic ---
+   713→        const updateWizardUI = () => {
+   714→            const percent = (currentStep / (stepItems.length - 1)) * 100;
+   715→            progressBar.style.width = `${percent}%`;
+   716→
+   717→            stepItems.forEach((item, index) => {
+   718→                item.classList.remove('active', 'completed', 'skipped');
+   719→                if (skippedSteps.includes(index)) {
+   720→                    item.classList.add('skipped');
+   721→                } else if (index < currentStep) {
+   722→                    item.classList.add('completed');
+   723→                } else if (index === currentStep) {
+   724→                    item.classList.add('active');
+   725→                }
+   726→            });
+   727→
+   728→            steps.forEach((step, index) => {
+   729→                step.classList.toggle('active', index === currentStep);
+   730→            });
+   731→
+   732→            if (currentStep === 0) {
+   733→                prevBtn.textContent = 'الرجوع للرئيسية';
+   734→            } else {
+   735→                prevBtn.textContent = 'السابق';
+   736→            }
+   737→            
+   738→            skipBtn.style.display = (currentStep > 0 && currentStep < steps.length) ? 'inline-block' : 'none';
+   739→            nextBtn.innerHTML = currentStep === steps.length - 1 ? '🚀 إنشاء الامتحان' : 'التالي';
+   740→        };
+   741→        
+   742→        const validateCurrentStep = () => {
+   743→            let isStepValid = true;
+   744→            const activeStep = document.querySelector('.wizard-step.active');
+   745→            if (!activeStep) return false;
+   746→
+   747→            // Clear previous errors
+   748→            activeStep.querySelectorAll('.is-invalid').forEach(el => el.classList.remove('is-invalid'));
+   749→            activeStep.querySelectorAll('.invalid-feedback.d-block').forEach(el => {
+   750→                el.classList.remove('d-block');
+   751→                el.classList.add('d-none');
+   752→            });
+   753→
+   754→            // For steps containing question counts
+   755→            const countInput = activeStep.querySelector('input[id$="_questionsCount"]');
+   756→            if (countInput) {
+   757→                // If count is > 0, all required fields in this step must be filled
+   758→                if (parseInt(countInput.value, 10) > 0) {
+   759→                    const inputs = activeStep.querySelectorAll('select[required], input[type="radio"][required]');
+   760→                    inputs.forEach(input => {
+   761→                        let isInputValid = false;
+   762→                        if (input.type === 'radio') {
+   763→                            const radioGroup = document.getElementsByName(input.name);
+   764→                            if ([...radioGroup].some(r => r.checked)) {
+   765→                                isInputValid = true;
+   766→                            } else {
+   767→                                const errorDiv = activeStep.querySelector(`#${input.name}Error`);
+   768→                                if (errorDiv) {
+   769→                                    errorDiv.classList.remove('d-none');
+   770→                                    errorDiv.classList.add('d-block');
+   771→                                }
+   772→                            }
+   773→                        } else { // For selects
+   774→                            if (input.value && input.value.trim() !== '') {
+   775→                                isInputValid = true;
+   776→                            }
+   777→                        }
+   778→
+   779→                        if (!isInputValid) {
+   780→                            input.classList.add('is-invalid');
+   781→                            isStepValid = false;
+   782→                        }
+   783→                    });
+   784→                }
+   785→                // If count is 0, the step is valid, no need to check other fields
+   786→            } else {
+   787→                // For steps without a question count (like the first step)
+   788→                const inputs = activeStep.querySelectorAll('input[required], select[required]');
+   789→                inputs.forEach(input => {
+   790→                    if (!input.value || input.value.trim() === '') {
+   791→                        input.classList.add('is-invalid');
+   792→                        isStepValid = false;
+   793→                    } else if (input.id === 'examTitle' && !/^[A-Za-z0-9\s]+$/.test(input.value)) {
+   794→                         input.classList.add('is-invalid');
+   795→                         isStepValid = false;
+   796→                    }
+   797→                });
+   798→            }
+   799→            
+
+[showing lines 400-799 of 1341; use offset=800 with limit to continue reading]

@@ -1,0 +1,625 @@
+     1→<?php
+     2→require_once '../config.php';
+     3→
+     4→header('Content-Type: application/json');
+     5→
+     6→if (!isset($_SESSION['user_id'])) {
+     7→    echo json_encode(['status' => 'error', 'message' => 'غير مسجل الدخول']);
+     8→    exit;
+     9→}
+    10→
+    11→$userId = $_SESSION['user_id'];
+    12→$action = $_POST['action'] ?? '';
+    13→
+    14→// تحديث النشاط
+    15→$stmt = $pdo->prepare("UPDATE users SET last_activity = NOW() WHERE id = ?");
+    16→$stmt->execute([$userId]);
+    17→
+    18→// مهام الصيانة (تنظيف المباريات المعلقة)
+    19→try {
+    20→    $stmt = $pdo->query("SELECT * FROM pvp_matches WHERE status = 'pending' AND created_at < (NOW() - INTERVAL 1 MINUTE)");
+    21→    $stuckMatches = $stmt->fetchAll();
+    22→    if ($stuckMatches) {
+    23→        $pdo->beginTransaction();
+    24→        foreach ($stuckMatches as $match) {
+    25→            $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ? WHERE id = ?")->execute([$match['bet_amount'], $match['player1_id']]);
+    26→            $pdo->prepare("UPDATE pvp_matches SET status = 'cancelled' WHERE id = ?")->execute([$match['id']]);
+    27→        }
+    28→        $pdo->commit();
+    29→    }
+    30→    $pdo->query("UPDATE users SET current_status = 'idle' WHERE current_status = 'playing' AND last_activity < (NOW() - INTERVAL 2 MINUTE)");
+    31→} catch (Exception $e) {}
+    32→
+    33→try {
+    34→    switch ($action) {
+    35→        case 'get_lobby_data': getLobbyData($pdo, $userId); break;
+    36→        case 'get_history_page': getHistoryPage($pdo, $userId); break;
+    37→        case 'friend_request': handleFriendRequest($pdo, $userId); break;
+    38→        case 'respond_friend': respondFriendRequest($pdo, $userId); break;
+    39→        case 'remove_friend': removeFriend($pdo, $userId); break;
+    40→        case 'clear_rejection': clearRejection($pdo, $userId); break; // 🔥 دالة جديدة
+    41→        case 'send_invite': sendInvite($pdo, $userId); break;
+    42→        case 'check_match_status': checkMatchStatus($pdo, $userId); break;
+    43→        case 'check_incoming': checkIncoming($pdo, $userId); break;
+    44→        case 'respond_invite': respondToInvite($pdo, $userId); break;
+    45→        case 'game_sync': syncGameState($pdo, $userId); break;
+    46→        case 'submit_score': submitScore($pdo, $userId); break;
+    47→        case 'surrender_game': surrenderGame($pdo, $userId); break;
+    48→        case 'claim_daily_bonus': claimDailyBonus($pdo, $userId); break;
+    49→        case 'start_ai_game': startAiGame($pdo, $userId); break;
+    50→        case 'store_ai_answer': storeAiAnswer($pdo, $userId); break;
+    51→        case 'submit_ai_score': submitAiScore($pdo, $userId); break;
+    52→        default: echo json_encode(['status' => 'error', 'message' => 'Invalid action']);
+    53→    }
+    54→} catch (Exception $e) {
+    55→    echo json_encode(['status' => 'error', 'message' => $e->getMessage()]);
+    56→}
+    57→
+    58→// --- دالة جلب الإعدادات ---
+    59→function getGameConfigs($pdo) {
+    60→    $defaults = [
+    61→        'ai_daily_limit' => 5, 'ai_status' => 1, 'ai_msg' => 'الصيانة جارية',
+    62→        'tier1_q' => 50, 'tier1_time' => 6, 'tier1_win' => 24, 'tier1_loss' => 25, 'tier1_status' => 1, 'tier1_msg' => 'مغلق',
+    63→        'tier2_q' => 100, 'tier2_time' => 12, 'tier2_win' => 59, 'tier2_loss' => 60, 'tier2_status' => 1, 'tier2_msg' => 'مغلق',
+    64→        'tier3_q' => 150, 'tier3_time' => 16, 'tier3_win' => 70, 'tier3_loss' => 60, 'tier3_status' => 1, 'tier3_msg' => 'مغلق'
+    65→    ];
+    66→    $stmt = $pdo->query("SELECT setting_key, setting_value FROM system_settings");
+    67→    $dbSettings = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+    68→    
+    69→    return array_merge($defaults, $dbSettings);
+    70→}
+    71→
+    72→function getLobbyData($pdo, $userId) {
+    73→    $stmt = $pdo->prepare("SELECT level, ai_attempts_count, ai_last_date, last_daily_bonus FROM users WHERE id = ?");
+    74→    $stmt->execute([$userId]);
+    75→    $me = $stmt->fetch();
+    76→    $myLevel = $me['level'] ?? 1;
+    77→
+    78→    $sqlFriends = "SELECT u.id, u.student_name, u.pvp_points, u.level, u.current_status, CASE WHEN u.last_activity > (NOW() - INTERVAL 15 SECOND) THEN 1 ELSE 0 END as is_online, TIMESTAMPDIFF(SECOND, u.last_activity, NOW()) as seconds_since_active FROM friendships f JOIN users u ON (u.id = f.sender_id OR u.id = f.receiver_id) WHERE (f.sender_id = ? OR f.receiver_id = ?) AND f.status = 'accepted' AND u.id != ? ORDER BY is_online DESC, u.current_status DESC, u.student_name ASC";
+    79→    $stmt = $pdo->prepare($sqlFriends); $stmt->execute([$userId, $userId, $userId]); $friendsList = $stmt->fetchAll();
+    80→
+    81→    $sqlLobby = "SELECT u.id, u.student_name, u.pvp_points, u.level, u.current_status FROM users u WHERE u.last_activity > (NOW() - INTERVAL 15 SECOND) AND u.id != ? AND (u.level = ? OR u.level IS NULL) AND u.id NOT IN (SELECT sender_id FROM friendships WHERE receiver_id = ? AND status = 'accepted' UNION SELECT receiver_id FROM friendships WHERE sender_id = ? AND status = 'accepted') ORDER BY u.current_status ASC, u.pvp_points DESC";
+    82→    $stmt = $pdo->prepare($sqlLobby); $stmt->execute([$userId, $myLevel, $userId, $userId]); $onlineUsers = $stmt->fetchAll();
+    83→
+    84→    // طلبات الصداقة الواردة (Pending)
+    85→    $friendRequests = $pdo->prepare("SELECT f.id, u.student_name, u.level FROM friendships f JOIN users u ON u.id = f.sender_id WHERE f.receiver_id = ? AND f.status = 'pending'");
+    86→    $friendRequests->execute([$userId]);
+    87→    
+    88→    // 🔥🔥 الجديد: جلب رسائل الرفض (Rejected) حيث أنا المرسل وتم رفضي
+    89→    $friendRejections = $pdo->prepare("SELECT f.id, u.student_name FROM friendships f JOIN users u ON u.id = f.receiver_id WHERE f.sender_id = ? AND f.status = 'rejected'");
+    90→    $friendRejections->execute([$userId]);
+    91→
+    92→    $leaderboard = $pdo->query("SELECT id, student_name, pvp_points, level FROM users ORDER BY pvp_points DESC LIMIT 10")->fetchAll();
+    93→
+    94→    $stmtRank = $pdo->prepare("SELECT COUNT(*) + 1 FROM users WHERE pvp_points > (SELECT pvp_points FROM users WHERE id = ?)");
+    95→    $stmtRank->execute([$userId]);
+    96→    $myRank = $stmtRank->fetchColumn();
+    97→
+    98→    $stmtMeData = $pdo->prepare("SELECT id, student_name, pvp_points, level FROM users WHERE id = ?");
+    99→    $stmtMeData->execute([$userId]);
+   100→    $myDataForLeaderboard = $stmtMeData->fetch(PDO::FETCH_ASSOC);
+   101→    $myDataForLeaderboard['rank'] = $myRank;
+   102→
+   103→    $configs = getGameConfigs($pdo);
+   104→    $dailyLimit = intval($configs['ai_daily_limit']);
+   105→    
+   106→    $today = date('Y-m-d');
+   107→    $aiAttemptsLeft = ($me['ai_last_date'] == $today) ? ($dailyLimit - intval($me['ai_attempts_count'])) : $dailyLimit;
+   108→
+   109→    echo json_encode([
+   110→        'status' => 'success', 
+   111→        'online' => $onlineUsers, 
+   112→        'friends' => $friendsList, 
+   113→        'friend_requests' => $friendRequests->fetchAll(),
+   114→        'friend_rejections' => $friendRejections->fetchAll(), // 🔥 إرسال الرفض
+   115→        'leaderboard' => $leaderboard, 
+   116→        'my_rank_data' => $myDataForLeaderboard,
+   117→        'my_points' => $myDataForLeaderboard['pvp_points'], 
+   118→        'my_level' => $myLevel, 
+   119→        'ai_attempts_left' => max(0, $aiAttemptsLeft), 
+   120→        'ai_daily_limit' => $dailyLimit, 
+   121→        'bonus_available' => ($me['last_daily_bonus'] != $today), 
+   122→        'seconds_to_midnight' => (strtotime('tomorrow midnight') - time()),
+   123→        'game_config' => $configs
+   124→    ]);
+   125→}
+   126→
+   127→function getHistoryPage($pdo, $userId) {
+   128→    $page = isset($_POST['page']) ? (int)$_POST['page'] : 1;
+   129→    $limit = 15;
+   130→    $offset = ($page - 1) * $limit;
+   131→    $stmtPvP = $pdo->prepare("SELECT m.created_at, m.winner_id, m.bet_amount, u1.student_name as p1_name, u2.student_name as p2_name, m.player1_id, m.player2_id, 'pvp' as type FROM pvp_matches m JOIN users u1 ON m.player1_id = u1.id JOIN users u2 ON m.player2_id = u2.id WHERE (m.player1_id = ? OR m.player2_id = ?) AND m.status = 'completed'");
+   132→    $stmtPvP->execute([$userId, $userId]);
+   133→    $pvpHistory = $stmtPvP->fetchAll(PDO::FETCH_ASSOC);
+   134→    $stmtAI = $pdo->prepare("SELECT created_at, total_score as points_change, performance_notes as status, 'ai' as type FROM trainings WHERE user_id = ? AND game_type = 'AI_MATCH'");
+   135→    $stmtAI->execute([$userId]);
+   136→    $aiHistory = $stmtAI->fetchAll(PDO::FETCH_ASSOC);
+   137→    $mergedHistory = array_merge($pvpHistory, $aiHistory);
+   138→    usort($mergedHistory, function($a, $b) { return strtotime($b['created_at']) - strtotime($a['created_at']); });
+   139→    $totalRecords = count($mergedHistory);
+   140→    $finalHistory = array_slice($mergedHistory, $offset, $limit);
+   141→    echo json_encode(['status' => 'success', 'history' => $finalHistory, 'has_more' => ($offset + $limit) < $totalRecords, 'current_page' => $page]);
+   142→}
+   143→
+   144→function logAiHistory($pdo, $userId, $pointsChange, $status) {
+   145→    $stmt = $pdo->prepare("INSERT INTO trainings (user_id, game_type, total_score, performance_notes, settings_json, results_json, created_at) VALUES (?, 'AI_MATCH', ?, ?, '{}', '[]', NOW())");
+   146→    $stmt->execute([$userId, $pointsChange, $status]);
+   147→}
+   148→
+   149→function startAiGame($pdo, $userId) { 
+   150→    $configs = getGameConfigs($pdo);
+   151→    
+   152→    if (isset($configs['ai_status']) && $configs['ai_status'] == 0) {
+   153→        $msg = $configs['ai_msg'] ? $configs['ai_msg'] : "الروبوت مغلق للصيانة حالياً 🤖💤";
+   154→        echo json_encode(['status' => 'error', 'message' => $msg]); 
+   155→        return;
+   156→    }
+   157→
+   158→    $stmt = $pdo->prepare("SELECT level, ai_attempts_count, ai_last_date FROM users WHERE id = ?"); 
+   159→    $stmt->execute([$userId]); 
+   160→    $user = $stmt->fetch(); 
+   161→    
+   162→    $dailyLimit = intval($configs['ai_daily_limit']);
+   163→    
+   164→    $today = date('Y-m-d');
+   165→    $attempts = ($user['ai_last_date'] == $today) ? $user['ai_attempts_count'] : 0; 
+   166→    if ($attempts >= $dailyLimit) { echo json_encode(['status' => 'error', 'message' => "⛔ استهلكت محاولاتك اليوم!"]); return; } 
+   167→    $newAttempts = $attempts + 1; 
+   168→    $pdo->prepare("UPDATE users SET ai_attempts_count = ?, ai_last_date = ?, current_status = 'playing' WHERE id = ?")->execute([$newAttempts, $today, $userId]); 
+   169→    
+   170→    $dbLevel = intval($user['level'] ?: 1); 
+   171→    $genLevel = max(1, $dbLevel); 
+   172→    
+   173→    $qCount = 100;
+   174→    $fullQuestions = MentalMathGenerator::generateBatch($genLevel, $qCount); 
+   175→    $uniqueMatchId = 'AI_' . time() . '_' . mt_rand(1000, 9999);
+   176→    
+   177→    $botSpeed = ['min' => 2140, 'max' => 4280]; 
+   178→    if ($genLevel == 2) $botSpeed = ['min' => 1800, 'max' => 3800]; 
+   179→    if ($genLevel == 3) $botSpeed = ['min' => 1500, 'max' => 3500];
+   180→    if ($genLevel >= 4) $botSpeed = ['min' => 1200, 'max' => 3000];
+   181→    
+   182→    $fullQuestions['config'] = ['mode' => 'ai', 'match_id' => $uniqueMatchId, 'duration' => 7 * 60, 'win_points' => 50, 'loss_points' => 0];
+   183→    $answers = []; 
+   184→    foreach ($fullQuestions as $key => $q) { if($key === 'config') continue; $answers[] = $q['a']; } 
+   185→    $_SESSION['ai_game_answers_' . $uniqueMatchId] = $answers; 
+   186→    $_SESSION['ai_user_answers_' . $uniqueMatchId] = []; 
+   187→    $clientQuestions = []; 
+   188→    foreach ($fullQuestions as $key => $q) { if($key === 'config') continue; $clientQuestions[] = ['q' => $q['q']]; } 
+   189→    echo json_encode(['status' => 'success', 'match_id' => $uniqueMatchId, 'questions' => $clientQuestions, 'game_config' => $fullQuestions['config'], 'bot_config' => $botSpeed, 'level_used' => $genLevel]); 
+   190→}
+   191→
+   192→function storeAiAnswer($pdo, $userId) { 
+   193→    $matchId = $_POST['match_id'] ?? '';
+   194→    if (empty($matchId) || !isset($_SESSION['ai_game_answers_' . $matchId])) { echo json_encode(['status' => 'error', 'message' => 'جلسة غير صالحة']); return; } 
+   195→    $qIndex = intval($_POST['q_index']); 
+   196→    $userAnswer = intval($_POST['user_answer']); 
+   197→    $_SESSION['ai_user_answers_' . $matchId][$qIndex] = $userAnswer; 
+   198→    echo json_encode(['status' => 'saved']); 
+   199→}
+   200→
+   201→function submitAiScore($pdo, $userId) { 
+   202→    $matchId = $_POST['match_id'] ?? '';
+   203→    $sessionKeyAnswers = 'ai_game_answers_' . $matchId;
+   204→    $sessionKeyUser = 'ai_user_answers_' . $matchId;
+   205→
+   206→    $realAnswers = $_SESSION[$sessionKeyAnswers] ?? [];
+   207→    $userAnswers = $_SESSION[$sessionKeyUser] ?? [];
+   208→    
+   209→    $userCorrect = 0; 
+   210→    foreach ($realAnswers as $idx => $realAns) { 
+   211→        if (isset($userAnswers[$idx]) && $userAnswers[$idx] == $realAns) { $userCorrect++; } 
+   212→    } 
+   213→    $userWrong = count($userAnswers) - $userCorrect;
+   214→
+   215→    $aiCorrect = intval($_POST['ai_score'] ?? 0);
+   216→    $aiTime = intval($_POST['ai_time'] ?? 9999);
+   217→    $userTime = intval($_POST['user_time'] ?? 9999);
+   218→
+   219→    $pointsAwarded = 0;
+   220→    $winReason = "";
+   221→    $winnerName = "";
+   222→    $resultStatus = "draw"; 
+   223→    $historyStatus = "loss"; 
+   224→
+   225→    if ($userCorrect > $aiCorrect) {
+   226→        $pointsAwarded = 50;
+   227→        $resultStatus = "win";
+   228→        $historyStatus = "win";
+   229→        $winnerName = "أنت (البطل)";
+   230→        $winReason = "تفوق في دقة الإجابات";
+   231→    } elseif ($userCorrect == $aiCorrect && $userTime < $aiTime) {
+   232→        $pointsAwarded = 50;
+   233→        $resultStatus = "win";
+   234→        $historyStatus = "win";
+   235→        $winnerName = "أنت (البطل)";
+   236→        $winReason = "تفوق في السرعة (نفس الدقة)";
+   237→    } elseif ($aiCorrect > $userCorrect) {
+   238→        $pointsAwarded = 0;
+   239→        $resultStatus = "loss";
+   240→        $historyStatus = "loss";
+   241→        $winnerName = "الروبوت 🤖";
+   242→        $winReason = "تفوق الروبوت في الدقة";
+   243→    } else {
+   244→        $pointsAwarded = 0;
+   245→        $resultStatus = "draw"; 
+   246→        $historyStatus = "draw";
+   247→        if ($userCorrect == $aiCorrect && $userTime >= $aiTime) {
+   248→             $resultStatus = "loss"; $historyStatus = "loss"; 
+   249→             $winnerName = "الروبوت 🤖";
+   250→             $winReason = "الروبوت كان أسرع";
+   251→        } else {
+   252→             $winnerName = "تعادل";
+   253→             $winReason = "تساوي في القوة";
+   254→        }
+   255→    }
+   256→
+   257→    if ($pointsAwarded > 0) {
+   258→        $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ?, current_status = 'idle' WHERE id = ?")->execute([$pointsAwarded, $userId]);
+   259→    } else {
+   260→        $pdo->prepare("UPDATE users SET current_status = 'idle' WHERE id = ?")->execute([$userId]);
+   261→    }
+   262→
+   263→    logAiHistory($pdo, $userId, $pointsAwarded, $historyStatus);
+   264→    unset($_SESSION[$sessionKeyAnswers]);
+   265→    unset($_SESSION[$sessionKeyUser]);
+   266→
+   267→    echo json_encode([
+   268→        'status' => 'success', 
+   269→        'my_score' => $userCorrect,
+   270→        'my_wrong' => $userWrong,
+   271→        'opp_score' => $aiCorrect, 
+   272→        'winner_name' => $winnerName,
+   273→        'win_reason' => $winReason,
+   274→        'points_awarded' => $pointsAwarded, 
+   275→        'result_status' => $resultStatus,
+   276→        'user_score' => $userCorrect, 
+   277→        'user_time' => $userTime,
+   278→        'ai_time' => $aiTime,
+   279→        'wrong' => $userWrong,
+   280→        'total' => count($realAnswers),
+   281→        'message' => $winReason
+   282→    ]); 
+   283→}
+   284→
+   285→function surrenderGame($pdo, $userId) { 
+   286→    $matchId = $_POST['match_id']; 
+   287→    $pdo->prepare("UPDATE users SET current_status = 'idle' WHERE id = ?")->execute([$userId]); 
+   288→    
+   289→    // AI Mode Surrender
+   290→    if (strpos($matchId, 'AI_') === 0) { 
+   291→        logAiHistory($pdo, $userId, 0, 'surrender');
+   292→        if(isset($_SESSION['ai_game_answers_' . $matchId])) {
+   293→            unset($_SESSION['ai_game_answers_' . $matchId]);
+   294→            unset($_SESSION['ai_user_answers_' . $matchId]);
+   295→        }
+   296→        echo json_encode(['status' => 'success', 'message' => 'تم الانسحاب']); 
+   297→        return; 
+   298→    } 
+   299→    
+   300→    // PvP Mode Surrender
+   301→    $stmt = $pdo->prepare("SELECT * FROM pvp_matches WHERE id = ? AND status = 'active'"); 
+   302→    $stmt->execute([$matchId]); $match = $stmt->fetch(); 
+   303→    if (!$match) { echo json_encode(['status' => 'error', 'message' => 'منتهية']); return; } 
+   304→    
+   305→    $qData = json_decode($match['questions_json'], true);
+   306→    $config = $qData['config'] ?? ['win_points' => $match['bet_amount'], 'loss_points' => $match['bet_amount']];
+   307→    $winnerId = ($match['player1_id'] == $userId) ? $match['player2_id'] : $match['player1_id']; 
+   308→    
+   309→    $pdo->beginTransaction(); 
+   310→    $totalWin = $config['loss_points'] + $config['win_points'];
+   311→    $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ?, current_status = 'idle' WHERE id = ?")->execute([$totalWin, $winnerId]); 
+   312→    $pdo->prepare("UPDATE pvp_matches SET status = 'completed', winner_id = ? WHERE id = ?")->execute([$winnerId, $matchId]); 
+   313→    $pdo->commit(); 
+   314→    
+   315→    echo json_encode([
+   316→        'status' => 'success', 
+   317→        'message' => 'تم الانسحاب',
+   318→        'my_score' => ($match['player1_id'] == $userId) ? $match['p1_score'] : $match['p2_score'],
+   319→        'opp_score' => ($match['player1_id'] == $userId) ? $match['p2_score'] : $match['p1_score'],
+   320→        'winner_id' => $winnerId
+   321→    ]); 
+   322→}
+   323→
+   324→function syncGameState($pdo, $userId) { 
+   325→    $matchId = $_POST['match_id']; 
+   326→    $stmt = $pdo->prepare("SELECT * FROM pvp_matches WHERE id = ?"); 
+   327→    $stmt->execute([$matchId]); 
+   328→    $match = $stmt->fetch(); 
+   329→    
+   330→    if (!$match) { echo json_encode(['status' => 'ended']); return; } 
+   331→    
+   332→    $isP1 = ($match['player1_id'] == $userId); 
+   333→    
+   334→    $myScore = $isP1 ? intval($match['p1_score']) : intval($match['p2_score']); 
+   335→    $myProgress = $isP1 ? intval($match['p1_progress']) : intval($match['p2_progress']);
+   336→    
+   337→    $opponentScore = $isP1 ? intval($match['p2_score']) : intval($match['p1_score']); 
+   338→    $opponentProgress = $isP1 ? intval($match['p2_progress']) : intval($match['p1_progress']);
+   339→    $oppStatus = $isP1 ? $match['p2_status'] : $match['p1_status']; 
+   340→    
+   341→    $myWrong = max(0, $myProgress - $myScore);
+   342→    $opponentWrong = max(0, $opponentProgress - $opponentScore);
+   343→
+   344→    if ($match['p1_status'] == 'finished' && $match['p2_status'] == 'finished' && $match['status'] != 'completed') { 
+   345→        finishGameLogic($pdo, $match); 
+   346→        echo json_encode(['status' => 'check_result']); 
+   347→        return; 
+   348→    } 
+   349→    
+   350→    if ($match['status'] == 'completed') { 
+   351→        $winReason = "انتهاء المباراة";
+   352→        $winnerName = "تعادل";
+   353→        $winTitle = "تعادل 🤝";
+   354→        $winMsg = "مباراة قوية! حظ أوفر في القادم.";
+   355→        
+   356→        $namesStmt = $pdo->prepare("SELECT id, student_name FROM users WHERE id IN (?, ?)");
+   357→        $namesStmt->execute([$match['player1_id'], $match['player2_id']]);
+   358→        $users = $namesStmt->fetchAll(PDO::FETCH_KEY_PAIR);
+   359→        
+   360→        if ($match['winner_id']) {
+   361→            $winnerName = $users[$match['winner_id']];
+   362→            if ($match['winner_id'] == $userId) {
+   363→                 $winTitle = "🎉 مبروك يا بطل!";
+   364→                 $winMsg = "فوز مستحق! تفوقت بجدارة.";
+   365→            } else {
+   366→                 $winTitle = "حظ أوفر 😢";
+   367→                 $winMsg = "ولا يهمك، المباراة الجاية بتاعتك!";
+   368→            }
+   369→        }
+   370→
+   371→        $qData = json_decode($match['questions_json'], true); 
+   372→        $config = $qData['config'] ?? ['win_points' => $match['bet_amount'], 'loss_points' => $match['bet_amount']]; 
+   373→        
+   374→        $result = 'draw'; 
+   375→        $pointsChange = 0; 
+   376→        if ($match['winner_id'] == $userId) { 
+   377→            $result = 'win'; 
+   378→            $pointsChange = $config['win_points']; 
+   379→        } elseif ($match['winner_id'] && $match['winner_id'] != $userId) { 
+   380→            $result = 'loss'; 
+   381→            $pointsChange = $config['loss_points']; 
+   382→        } 
+   383→        
+   384→        echo json_encode([
+   385→            'status' => 'completed', 
+   386→            'result' => $result, 
+   387→            'points_won' => ($result == 'win') ? $pointsChange : 0, 
+   388→            'points_lost' => ($result == 'loss') ? $pointsChange : 0,
+   389→            'my_score' => $myScore,
+   390→            'my_wrong' => $myWrong,
+   391→            'opp_score' => $opponentScore,
+   392→            'opp_wrong' => $opponentWrong,
+   393→            'winner_name' => $winnerName,
+   394→            'win_title' => $winTitle,
+   395→            'win_msg' => $winMsg
+   396→        ]); 
+   397→        return; 
+   398→    } 
+   399→    
+   400→    echo json_encode([
+   401→        'status' => 'playing', 
+   402→        'my_score' => $myScore, 
+   403→        'opponent_score' => $opponentScore, 
+   404→        'opponent_wrong' => $opponentWrong, 
+   405→        'opponent_finished' => ($oppStatus == 'finished')
+   406→    ]); 
+   407→}
+   408→
+   409→function submitScore($pdo, $userId) { 
+   410→    $matchId = $_POST['match_id']; 
+   411→    $score = intval($_POST['score']); 
+   412→    $progress = intval($_POST['progress'] ?? 0); 
+   413→
+   414→    $isFinished = $_POST['finished'] === 'true'; 
+   415→    $stmt = $pdo->prepare("SELECT player1_id FROM pvp_matches WHERE id = ?"); 
+   416→    $stmt->execute([$matchId]); 
+   417→    $p1Id = $stmt->fetchColumn(); 
+   418→
+   419→    $colScore = ($userId == $p1Id) ? 'p1_score' : 'p2_score'; 
+   420→    $colProgress = ($userId == $p1Id) ? 'p1_progress' : 'p2_progress';
+   421→    $colStatus = ($userId == $p1Id) ? 'p1_status' : 'p2_status'; 
+   422→    
+   423→    $sql = "UPDATE pvp_matches SET $colScore = ?, $colProgress = ?"; 
+   424→    if ($isFinished) { $sql .= ", $colStatus = 'finished'"; } 
+   425→    $sql .= " WHERE id = ?"; 
+   426→    
+   427→    if ($progress < $score) $progress = $score;
+   428→
+   429→    $pdo->prepare($sql)->execute([$score, $progress, $matchId]); 
+   430→    echo json_encode(['status' => 'success']); 
+   431→}
+   432→
+   433→function finishGameLogic($pdo, $match) { 
+   434→    $winnerId = NULL; 
+   435→    if ($match['p1_score'] > $match['p2_score']) $winnerId = $match['player1_id']; 
+   436→    elseif ($match['p2_score'] > $match['p1_score']) $winnerId = $match['player2_id']; 
+   437→    
+   438→    $qData = json_decode($match['questions_json'], true); 
+   439→    $config = $qData['config'] ?? ['win_points' => $match['bet_amount'], 'loss_points' => $match['bet_amount']]; 
+   440→    
+   441→    $pdo->beginTransaction(); 
+   442→    $pdo->prepare("UPDATE users SET current_status = 'idle' WHERE id IN (?, ?)")->execute([$match['player1_id'], $match['player2_id']]); 
+   443→    
+   444→    if ($winnerId) { 
+   445→        $totalWin = $config['loss_points'] + $config['win_points']; 
+   446→        $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ? WHERE id = ?")->execute([$totalWin, $winnerId]); 
+   447→    } else { 
+   448→        $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ? WHERE id = ?")->execute([$config['loss_points'], $match['player1_id']]); 
+   449→        $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ? WHERE id = ?")->execute([$config['loss_points'], $match['player2_id']]); 
+   450→    } 
+   451→    
+   452→    $pdo->prepare("UPDATE pvp_matches SET status = 'completed', winner_id = ? WHERE id = ?")->execute([$winnerId, $match['id']]); 
+   453→    $pdo->commit(); 
+   454→}
+   455→
+   456→function claimDailyBonus($pdo, $userId) { $today = date('Y-m-d'); $stmt = $pdo->prepare("SELECT pvp_points, last_daily_bonus FROM users WHERE id = ?"); $stmt->execute([$userId]); $user = $stmt->fetch(); if ($user['last_daily_bonus'] != $today) { $bonus = rand(50, 60); $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ?, last_daily_bonus = ? WHERE id = ?")->execute([$bonus, $today, $userId]); echo json_encode(['status' => 'success', 'message' => "🎁 مبروك! ضفنا $bonus نقطة."]); } else { echo json_encode(['status' => 'error', 'message' => 'أخدت المكافأة خلاص.']); } }
+   457→function handleFriendRequest($pdo, $userId) { $targetId = $_POST['target_id']; $stmt = $pdo->prepare("SELECT id, status FROM friendships WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)"); $stmt->execute([$userId, $targetId, $targetId, $userId]); $exist = $stmt->fetch(); if($exist) { if($exist['status'] == 'rejected') { $pdo->prepare("DELETE FROM friendships WHERE id = ?")->execute([$exist['id']]); } else { echo json_encode(['status' => 'error', 'message' => 'طلب مكرر']); return; } } $stmt = $pdo->prepare("INSERT INTO friendships (sender_id, receiver_id, status) VALUES (?, ?, 'pending')"); $stmt->execute([$userId, $targetId]); echo json_encode(['status' => 'success', 'message' => 'تم الإرسال']); }
+   458→function respondFriendRequest($pdo, $userId) { $requestId = $_POST['request_id']; $response = $_POST['response']; if($response == 'accept') { $stmt = $pdo->prepare("UPDATE friendships SET status = 'accepted' WHERE id = ? AND receiver_id = ?"); $stmt->execute([$requestId, $userId]); echo json_encode(['status' => 'success', 'message' => 'تم القبول']); } else { $stmt = $pdo->prepare("UPDATE friendships SET status = 'rejected' WHERE id = ? AND receiver_id = ?"); $stmt->execute([$requestId, $userId]); echo json_encode(['status' => 'success', 'message' => 'تم الرفض']); } }
+   459→function clearRejection($pdo, $userId) { 
+   460→    $rejectionId = $_POST['rejection_id']; 
+   461→    // حذف الرفض من قاعدة البيانات عند قراءته
+   462→    $stmt = $pdo->prepare("DELETE FROM friendships WHERE id = ? AND sender_id = ? AND status = 'rejected'"); 
+   463→    $stmt->execute([$rejectionId, $userId]); 
+   464→    echo json_encode(['status' => 'success']); 
+   465→}
+   466→function removeFriend($pdo, $userId) { $friendId = $_POST['friend_id']; $stmt = $pdo->prepare("DELETE FROM friendships WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)"); $stmt->execute([$userId, $friendId, $friendId, $userId]); echo json_encode(['status' => 'success', 'message' => 'تم الحذف']); }
+   467→
+   468→function sendInvite($pdo, $userId) { 
+   469→    $targetId = $_POST['target_id']; 
+   470→    $tier = intval($_POST['tier']); 
+   471→    
+   472→    // 🔥🔥 جلب الإعدادات
+   473→    $configs = getGameConfigs($pdo);
+   474→
+   475→    // التحقق من حالة المستوى قبل أي شيء
+   476→    $tierStatusKey = "tier{$tier}_status";
+   477→    $tierMsgKey = "tier{$tier}_msg";
+   478→    
+   479→    if (isset($configs[$tierStatusKey]) && $configs[$tierStatusKey] == 0) {
+   480→        $msg = $configs[$tierMsgKey] ? $configs[$tierMsgKey] : "هذا المستوى مغلق حالياً ⛔";
+   481→        echo json_encode(['status' => 'error', 'message' => $msg]);
+   482→        return;
+   483→    }
+   484→
+   485→    $tiers = [
+   486→        1 => ['q' => intval($configs['tier1_q']), 'time' => intval($configs['tier1_time']), 'win' => intval($configs['tier1_win']), 'loss' => intval($configs['tier1_loss']), 'name' => 'Bronze'],
+   487→        2 => ['q' => intval($configs['tier2_q']), 'time' => intval($configs['tier2_time']), 'win' => intval($configs['tier2_win']), 'loss' => intval($configs['tier2_loss']), 'name' => 'Silver'],
+   488→        3 => ['q' => intval($configs['tier3_q']), 'time' => intval($configs['tier3_time']), 'win' => intval($configs['tier3_win']), 'loss' => intval($configs['tier3_loss']), 'name' => 'Gold']
+   489→    ];
+   490→    
+   491→    if (!isset($tiers[$tier])) { echo json_encode(['status' => 'error', 'message' => 'مستوى غير صالح']); return; } 
+   492→    
+   493→    $config = $tiers[$tier]; 
+   494→    $pointsToDeduct = $config['loss']; 
+   495→    $qCount = $config['q']; 
+   496→    $stmt = $pdo->prepare("SELECT level FROM users WHERE id = ?"); $stmt->execute([$userId]); $userLevel = $stmt->fetchColumn(); $dbLevel = intval($userLevel ?: 1); 
+   497→    $genLevel = max(1, $dbLevel); 
+   498→    $stmt = $pdo->prepare("SELECT pvp_points FROM users WHERE id = ?"); $stmt->execute([$userId]); if ($stmt->fetchColumn() < $pointsToDeduct) { echo json_encode(['status' => 'error', 'message' => 'رصيد نقاطك غير كافٍ!']); return; } $stmt = $pdo->prepare("SELECT current_status FROM users WHERE id = ?"); $stmt->execute([$targetId]); if ($stmt->fetchColumn() === 'playing') { echo json_encode(['status' => 'error', 'message' => 'المنافس يلعب حالياً، حاول لاحقاً!']); return; } $questions = MentalMathGenerator::generateBatch($genLevel, $qCount); $questions['config'] = ['tier' => $tier, 'duration' => $config['time'] * 60, 'win_points' => $config['win'], 'loss_points' => $config['loss']]; $pdo->beginTransaction(); try { $pdo->prepare("UPDATE users SET pvp_points = pvp_points - ? WHERE id = ?")->execute([$pointsToDeduct, $userId]); $sql = "INSERT INTO pvp_matches (player1_id, player2_id, bet_amount, question_count, questions_json, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', NOW())"; $stmt = $pdo->prepare($sql); $stmt->execute([$userId, $targetId, $pointsToDeduct, $qCount, json_encode($questions)]); $matchId = $pdo->lastInsertId(); $pdo->commit(); echo json_encode(['status' => 'success', 'message' => 'تم إرسال التحدي...', 'match_id' => $matchId]); } catch (Exception $e) { $pdo->rollBack(); throw $e; } }
+   499→function checkMatchStatus($pdo, $userId) { $matchId = $_POST['match_id']; $stmt = $pdo->prepare("SELECT * FROM pvp_matches WHERE id = ? AND player1_id = ?"); $stmt->execute([$matchId, $userId]); $match = $stmt->fetch(); if (!$match) { echo json_encode(['status' => 'error', 'message' => 'تحدي غير موجود']); return; } if ($match['status'] == 'active') { echo json_encode(['status' => 'accepted', 'match_id' => $matchId]); return; } if ($match['status'] == 'rejected') { echo json_encode(['status' => 'rejected', 'message' => 'تم رفض التحدي.']); return; } if ($match['status'] == 'cancelled') { echo json_encode(['status' => 'timeout', 'message' => 'تم الإلغاء.']); return; } if ($match['status'] == 'pending') { if ((time() - strtotime($match['created_at'])) > 30) { $pdo->beginTransaction(); $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ? WHERE id = ?")->execute([$match['bet_amount'], $userId]); $pdo->prepare("UPDATE pvp_matches SET status = 'cancelled' WHERE id = ?")->execute([$matchId]); $pdo->commit(); echo json_encode(['status' => 'timeout', 'message' => 'انتهى الوقت.']); } else { echo json_encode(['status' => 'waiting']); } return; } }
+   500→function checkIncoming($pdo, $userId) { $stmt = $pdo->prepare("SELECT m.id, u.student_name, m.bet_amount, m.question_count FROM pvp_matches m JOIN users u ON m.player1_id = u.id WHERE m.player2_id = ? AND m.status = 'pending' LIMIT 1"); $stmt->execute([$userId]); $invite = $stmt->fetch(); $stmt = $pdo->prepare("SELECT id, questions_json, question_count FROM pvp_matches WHERE (player1_id = ? OR player2_id = ?) AND status = 'active'"); $stmt->execute([$userId, $userId]); $activeGame = $stmt->fetch(); echo json_encode(['status' => 'success', 'invite' => $invite, 'active_game' => $activeGame]); }
+   501→function respondToInvite($pdo, $userId) { $matchId = $_POST['match_id']; $response = $_POST['response']; $stmt = $pdo->prepare("SELECT * FROM pvp_matches WHERE id = ? AND player2_id = ? AND status = 'pending'"); $stmt->execute([$matchId, $userId]); $match = $stmt->fetch(); if (!$match) { echo json_encode(['status' => 'error', 'message' => 'انتهى التحدي']); return; } $pdo->beginTransaction(); try { if ($response === 'reject') { $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ? WHERE id = ?")->execute([$match['bet_amount'], $match['player1_id']]); $pdo->prepare("UPDATE pvp_matches SET status = 'rejected' WHERE id = ?")->execute([$matchId]); $msg = 'تم الرفض'; } else { $stmt = $pdo->prepare("SELECT pvp_points FROM users WHERE id = ?"); $stmt->execute([$userId]); if ($stmt->fetchColumn() < $match['bet_amount']) { $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ? WHERE id = ?")->execute([$match['bet_amount'], $match['player1_id']]); $pdo->prepare("UPDATE pvp_matches SET status = 'cancelled' WHERE id = ?")->execute([$matchId]); echo json_encode(['status' => 'error', 'message' => 'رصيدك لا يكفي']); $pdo->commit(); return; } $pdo->prepare("UPDATE users SET pvp_points = pvp_points - ?, current_status = 'playing' WHERE id = ?")->execute([$match['bet_amount'], $userId]); $pdo->prepare("UPDATE users SET current_status = 'playing' WHERE id = ?")->execute([$match['player1_id']]); $pdo->prepare("UPDATE pvp_matches SET status = 'active', created_at = NOW() WHERE id = ?")->execute([$matchId]); $msg = 'تم القبول!'; } $pdo->commit(); echo json_encode(['status' => 'success', 'message' => $msg]); } catch (Exception $e) { $pdo->rollBack(); throw $e; } }
+   502→
+   503→class MentalMathGenerator {
+   504→    public static function generateBatch($level, $count) {
+   505→        $questions = [];
+   506→        for ($i = 0; $i < $count; $i++) {
+   507→            $questions[] = self::generateQuestion($level);
+   508→        }
+   509→        return $questions;
+   510→    }
+   511→
+   512→    private static function generateQuestion($level) {
+   513→        $numCols = 1; 
+   514→        $opCols = 1;  
+   515→        $minRows = 3; $maxRows = 5;
+   516→
+   517→        if ($level == 1) {
+   518→            $numCols = 1; $opCols = 1;
+   519→            $minRows = 3; $maxRows = 5;
+   520→        } elseif ($level == 2) {
+   521→            $numCols = 1; $opCols = 1;
+   522→            $minRows = 3; $maxRows = 5;
+   523→        } elseif ($level == 3) {
+   524→            $numCols = 2; 
+   525→            $opCols = 1;
+   526→            $minRows = 3; $maxRows = 6;
+   527→        } elseif ($level == 4) {
+   528→            $numCols = 2;
+   529→            $opCols = 2; 
+   530→            $minRows = 3; $maxRows = 5;
+   531→        } else {
+   532→            $numCols = 2; $opCols = 2;
+   533→            $minRows = 3; $maxRows = 5;
+   534→        }
+   535→
+   536→        $floors = rand($minRows, $maxRows);
+   537→        $numbers = [];
+   538→        
+   539→        $currentVal = array_fill(0, $numCols, 0);
+   540→        for ($d = 0; $d < $opCols; $d++) {
+   541→            $currentVal[$d] = rand(1, 9); 
+   542→        }
+   543→        $numbers[] = self::digitsToNum($currentVal);
+   544→
+   545→        for ($f = 1; $f < $floors; $f++) {
+   546→            $validRowFound = false;
+   547→            $attempts = 0;
+   548→            
+   549→            while (!$validRowFound && $attempts < 50) {
+   550→                $attempts++;
+   551→                $tempMoveDigits = array_fill(0, $opCols, 0);
+   552→                $isValidRow = true;
+   553→                $tempCurrentVal = $currentVal; 
+   554→
+   555→                for ($d = 0; $d < $opCols; $d++) {
+   556→                    $allowed = self::getAllowedRules($level, $d);
+   557→                    $foundDigitMove = false;
+   558→                    $candidates = range(-9, 9);
+   559→                    shuffle($candidates);
+   560→
+   561→                    foreach ($candidates as $change) {
+   562→                        if ($change == 0) continue;
+   563→                        $oldDigit = $tempCurrentVal[$d];
+   564→                        $sum = $oldDigit + $change;
+   565→                        $type = 'DIRECT';
+   566→                        if ($sum >= 10 || $sum < 0) { $type = 'COMP10'; } 
+   567→                        else { if ($change > 0) { if ($oldDigit < 5 && $sum >= 5) $type = 'COMP5'; } else { if ($oldDigit >= 5 && $sum < 5) $type = 'COMP5'; } }
+   568→                        if (!in_array($type, $allowed)) { continue; }
+   569→                        if ($type == 'COMP10') {
+   570→                            $nextCol = $d + 1;
+   571→                            if ($nextCol >= $numCols) { continue; }
+   572→                            $carry = ($sum >= 10) ? 1 : -1;
+   573→                            $nextVal = $tempCurrentVal[$nextCol] + $carry;
+   574→                            if ($nextVal < 0 || $nextVal > 9) { continue; }
+   575→                            $tempCurrentVal[$nextCol] = $nextVal;
+   576→                            if ($sum >= 10) $sum -= 10;
+   577→                            if ($sum < 0) $sum += 10;
+   578→                        }
+   579→                        $tempCurrentVal[$d] = $sum;
+   580→                        $tempMoveDigits[$d] = $change;
+   581→                        $foundDigitMove = true;
+   582→                        break; 
+   583→                    }
+   584→
+   585→                    if (!$foundDigitMove) {
+   586→                        $isValidRow = false;
+   587→                        break;
+   588→                    }
+   589→                }
+   590→
+   591→                if ($isValidRow) {
+   592→                    $numMove = self::digitsToNum($tempMoveDigits);
+   593→                    if ($numMove != 0) {
+   594→                        $numbers[] = $numMove;
+   595→                        $currentVal = $tempCurrentVal; 
+   596→                        $validRowFound = true;
+   597→                    }
+   598→                }
+   599→            }
+   600→            
+   601→            if (!$validRowFound) break;
+   602→        }
+   603→
+   604→        $qText = ltrim(implode("\n", array_map(function($n) { return ($n > 0) ? "+$n" : "$n"; }, $numbers)), '+');
+   605→        return ['q' => $qText, 'a' => array_sum($numbers)];
+   606→    }
+   607→
+   608→    private static function digitsToNum($digitsArr) {
+   609→        $num = 0;
+   610→        foreach ($digitsArr as $pos => $val) {
+   611→            $num += $val * pow(10, $pos);
+   612→        }
+   613→        return $num;
+   614→    }
+   615→
+   616→    private static function getAllowedRules($level, $digitIndex) {
+   617→        if ($level == 1) return ['DIRECT'];
+   618→        if ($level == 2) return ['DIRECT', 'COMP5'];
+   619→        if ($level == 3) return ['DIRECT', 'COMP5', 'COMP10']; 
+   620→        if ($level == 4) { if ($digitIndex == 0) return ['DIRECT', 'COMP5']; return ['DIRECT']; }
+   621→        if ($level == 5) { return ['DIRECT', 'COMP5']; }
+   622→        return ['DIRECT', 'COMP5', 'COMP10'];
+   623→    }
+   624→}
+   625→?>

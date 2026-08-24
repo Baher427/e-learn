@@ -1,0 +1,475 @@
+     1→<?php
+     2→require_once 'config.php';
+     3→
+     4→// 1. التحقق من الصلاحيات
+     5→if (!isset($_SESSION['is_admin']) || !$_SESSION['is_admin']) { 
+     6→    header("Location: login.php"); exit; 
+     7→}
+     8→
+     9→// دالة مساعدة لإعادة التوجيه (PRG Pattern)
+    10→function redirectWithMsg($msg, $type = 'success') {
+    11→    $_SESSION['flash_msg'] = ['text' => $msg, 'type' => $type];
+    12→    header("Location: admin_arena.php");
+    13→    exit;
+    14→}
+    15→
+    16→// ---------------------------------------------------------
+    17→// معالجة الأوامر (POST Actions)
+    18→// ---------------------------------------------------------
+    19→if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    20→    
+    21→    // A. تحديث إعدادات اللعبة
+    22→    if (isset($_POST['save_game_config'])) {
+    23→        $configs = [
+    24→            'tier1_q', 'tier1_time', 'tier1_win', 'tier1_loss', 'tier1_msg',
+    25→            'tier2_q', 'tier2_time', 'tier2_win', 'tier2_loss', 'tier2_msg',
+    26→            'tier3_q', 'tier3_time', 'tier3_win', 'tier3_loss', 'tier3_msg',
+    27→            'ai_daily_limit', 'ai_msg'
+    28→        ];
+    29→        $statusConfigs = ['ai_status', 'tier1_status', 'tier2_status', 'tier3_status'];
+    30→
+    31→        $pdo->beginTransaction();
+    32→        try {
+    33→            $stmt = $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = ?");
+    34→            foreach ($configs as $key) {
+    35→                if (isset($_POST[$key])) $stmt->execute([$key, $_POST[$key], $_POST[$key]]);
+    36→            }
+    37→            foreach ($statusConfigs as $key) {
+    38→                $val = isset($_POST[$key]) ? '1' : '0';
+    39→                $stmt->execute([$key, $val, $val]);
+    40→            }
+    41→            $pdo->commit();
+    42→            redirectWithMsg("تم تحديث إعدادات اللعبة والحالة بنجاح!");
+    43→        } catch (Exception $e) {
+    44→            $pdo->rollBack();
+    45→            redirectWithMsg("حدث خطأ أثناء الحفظ.", "error");
+    46→        }
+    47→    }
+    48→
+    49→    // B. تحديث بيانات الطالب السريعة
+    50→    if (isset($_POST['quick_update'])) {
+    51→        $uid = $_POST['user_id'];
+    52→        $pvp = intval($_POST['pvp_points']);
+    53→        $lvl = intval($_POST['level']);
+    54→        
+    55→        $pdo->prepare("UPDATE users SET pvp_points = ?, level = ? WHERE id = ?")->execute([$pvp, $lvl, $uid]);
+    56→        $pdo->prepare("DELETE FROM friendships WHERE (sender_id = ? OR receiver_id = ?) AND sender_id IN (SELECT id FROM users WHERE level != ?) AND receiver_id IN (SELECT id FROM users WHERE level != ?)")->execute([$uid, $uid, $lvl, $lvl]);
+    57→        
+    58→        redirectWithMsg("تم تحديث بيانات الطالب.");
+    59→    }
+    60→
+    61→    // C. التحكم في المحاولات
+    62→    if (isset($_POST['adjust_ai'])) {
+    63→        $uid = $_POST['user_id'];
+    64→        $dir = $_POST['dir'];
+    65→        $amount = intval($_POST['ai_amount']);
+    66→        
+    67→        if ($amount > 0) {
+    68→            if ($dir === 'give') {
+    69→                $pdo->prepare("UPDATE users SET ai_attempts_count = GREATEST(0, ai_attempts_count - ?) WHERE id = ?")->execute([$amount, $uid]);
+    70→            } elseif ($dir === 'take') {
+    71→                $pdo->prepare("UPDATE users SET ai_attempts_count = ai_attempts_count + ? WHERE id = ?")->execute([$amount, $uid]);
+    72→            }
+    73→            redirectWithMsg("تم تعديل رصيد المحاولات.");
+    74→        }
+    75→        if ($dir === 'reset') {
+    76→            $pdo->prepare("UPDATE users SET ai_attempts_count = 0 WHERE id = ?")->execute([$uid]);
+    77→            redirectWithMsg("تم تصفير عداد المحاولات.");
+    78→        }
+    79→    }
+    80→
+    81→    // D. التحكم في المباريات الحية
+    82→    if (isset($_POST['live_action'])) {
+    83→        $mid = $_POST['match_id'];
+    84→        $act = $_POST['act_type'];
+    85→        $match = $pdo->query("SELECT * FROM pvp_matches WHERE id = $mid")->fetch();
+    86→        
+    87→        if ($match && $match['status'] == 'active') {
+    88→            $pdo->beginTransaction();
+    89→            if ($act == 'cancel') {
+    90→                $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ? WHERE id IN (?, ?)")->execute([$match['bet_amount'], $match['player1_id'], $match['player2_id']]);
+    91→                $pdo->prepare("UPDATE pvp_matches SET status = 'cancelled' WHERE id = ?")->execute([$mid]);
+    92→                $pdo->prepare("UPDATE users SET current_status = 'idle' WHERE id IN (?, ?)")->execute([$match['player1_id'], $match['player2_id']]);
+    93→                $pdo->commit();
+    94→                redirectWithMsg("تم إلغاء المباراة وإعادة النقاط.", "warning");
+    95→            } elseif ($act == 'win_p1' || $act == 'win_p2') {
+    96→                $winner = ($act == 'win_p1') ? $match['player1_id'] : $match['player2_id'];
+    97→                $pot = $match['bet_amount'] * 2;
+    98→                $pdo->prepare("UPDATE users SET pvp_points = pvp_points + ? WHERE id = ?")->execute([$pot, $winner]);
+    99→                $pdo->prepare("UPDATE pvp_matches SET status = 'completed', winner_id = ? WHERE id = ?")->execute([$winner, $mid]);
+   100→                $pdo->prepare("UPDATE users SET current_status = 'idle' WHERE id IN (?, ?)")->execute([$match['player1_id'], $match['player2_id']]);
+   101→                $pdo->commit();
+   102→                redirectWithMsg("تم إنهاء المباراة يدوياً.");
+   103→            }
+   104→        }
+   105→    }
+   106→    
+   107→    // E. تصفير السجل
+   108→    if (isset($_POST['history_action']) && $_POST['history_action'] == 'wipe_all') {
+   109→        $t_uid = $_POST['h_user_id'];
+   110→        $pdo->prepare("DELETE FROM pvp_matches WHERE player1_id = ? OR player2_id = ?")->execute([$t_uid, $t_uid]);
+   111→        $pdo->prepare("DELETE FROM trainings WHERE user_id = ?")->execute([$t_uid]);
+   112→        redirectWithMsg("تم تصفير سجل الطالب بالكامل!", "warning");
+   113→    }
+   114→    
+   115→    // AJAX Handlers (Keep as is, but ensure JSON response)
+   116→    if (isset($_POST['ajax_delete_history'])) {
+   117→        header('Content-Type: application/json');
+   118→        $id = $_POST['item_id'];
+   119→        $table = $_POST['item_type'] == 'ai' ? 'trainings' : 'pvp_matches';
+   120→        try {
+   121→            $pdo->prepare("DELETE FROM $table WHERE id = ?")->execute([$id]);
+   122→            echo json_encode(['status' => 'success']);
+   123→        } catch (Exception $e) { http_response_code(500); echo json_encode(['status' => 'error']); }
+   124→        exit;
+   125→    }
+   126→}
+   127→
+   128→// ---------------------------------------------------------
+   129→// معالجة الرسائل
+   130→// ---------------------------------------------------------
+   131→$flashMsg = null;
+   132→if (isset($_SESSION['flash_msg'])) {
+   133→    $flashMsg = $_SESSION['flash_msg'];
+   134→    unset($_SESSION['flash_msg']);
+   135→}
+   136→
+   137→// ---------------------------------------------------------
+   138→// جلب البيانات
+   139→// ---------------------------------------------------------
+   140→if (isset($_GET['ajax_history'])) {
+   141→    header('Content-Type: application/json');
+   142→    $hid = $_GET['ajax_history'];
+   143→    $stmt = $pdo->prepare("SELECT student_name FROM users WHERE id = ?");
+   144→    $stmt->execute([$hid]);
+   145→    $studentName = $stmt->fetchColumn();
+   146→    $sqlHist = "(SELECT id, 'pvp' as type, created_at, IF(winner_id=$hid, 'win', IF(winner_id IS NULL, 'draw', 'loss')) as res, bet_amount as pts, (SELECT student_name FROM users WHERE id=IF(player1_id=$hid, player2_id, player1_id)) as opp FROM pvp_matches WHERE (player1_id=$hid OR player2_id=$hid) AND status='completed') UNION ALL (SELECT id, 'ai' as type, created_at, IF(performance_notes='win', 'win', IF(performance_notes='loss', 'loss', 'draw')) as res, total_score as pts, 'الروبوت' as opp FROM trainings WHERE user_id=$hid AND game_type='AI_MATCH') ORDER BY created_at DESC LIMIT 50";
+   147→    $data = $pdo->query($sqlHist)->fetchAll(PDO::FETCH_ASSOC);
+   148→    echo json_encode(['name' => $studentName, 'data' => $data]);
+   149→    exit;
+   150→}
+   151→
+   152→$settingsRaw = $pdo->query("SELECT * FROM system_settings")->fetchAll(PDO::FETCH_KEY_PAIR);
+   153→$defaults = [
+   154→    'ai_daily_limit' => 5, 'ai_status' => 1, 'ai_msg' => 'غير متاح حالياً',
+   155→    'tier1_q' => 50, 'tier1_time' => 6, 'tier1_win' => 24, 'tier1_loss' => 25, 'tier1_status' => 1, 'tier1_msg' => 'مغلق',
+   156→    'tier2_q' => 100, 'tier2_time' => 12, 'tier2_win' => 59, 'tier2_loss' => 60, 'tier2_status' => 1, 'tier2_msg' => 'مغلق',
+   157→    'tier3_q' => 150, 'tier3_time' => 16, 'tier3_win' => 70, 'tier3_loss' => 60, 'tier3_status' => 1, 'tier3_msg' => 'مغلق'
+   158→];
+   159→$settings = array_merge($defaults, $settingsRaw);
+   160→
+   161→$trainers = $pdo->query("SELECT * FROM trainers")->fetchAll();
+   162→$sql = "SELECT u.*, t.name as trainer_name, m.id as active_match_id, CASE WHEN u.current_status = 'playing' AND m.id IS NOT NULL THEN CONCAT('pvp:', IF(m.player1_id = u.id, (SELECT student_name FROM users WHERE id = m.player2_id), (SELECT student_name FROM users WHERE id = m.player1_id))) WHEN u.current_status = 'playing' THEN 'ai' ELSE 'idle' END as real_status FROM users u LEFT JOIN trainers t ON u.trainer_id = t.id LEFT JOIN pvp_matches m ON (m.player1_id = u.id OR m.player2_id = u.id) AND m.status = 'active' WHERE u.status = 'approved' AND u.username != 'system_bot' ORDER BY u.current_status DESC, u.last_activity DESC";
+   163→$users = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+   164→?>
+   165→
+   166→<!DOCTYPE html>
+   167→<html lang="ar" dir="rtl">
+   168→<head>
+   169→    <meta charset="UTF-8">
+   170→    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   171→    <title>غرفة العمليات | Admin Arena</title>
+   172→    <script src="https://cdn.tailwindcss.com"></script>
+   173→    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
+   174→    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+   175→    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+   176→    <link rel="stylesheet" href="admin_style.css"> 
+   177→</head>
+   178→<body x-data="adminApp()" :data-theme="theme">
+   179→
+   180→    <div class="arena-bg"></div>
+   181→
+   182→    <!-- Mobile Sidebar Overlay -->
+   183→    <div class="sidebar-overlay" :class="{'active': sidebarOpen}" @click="sidebarOpen = false"></div>
+   184→
+   185→    <div class="app-layout">
+   186→        
+   187→        <!-- Sidebar -->
+   188→        <aside class="sidebar" :class="{'active': sidebarOpen}">
+   189→            <div class="sidebar-header">
+   190→                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-600 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+   191→                    <span class="text-xl text-white">🛡️</span>
+   192→                </div>
+   193→                <div>
+   194→                    <h1 class="font-black text-lg tracking-wide text-[var(--text-primary)]">لوحة التحكم</h1>
+   195→                    <p class="text-[10px] text-[var(--text-muted)] font-bold">Arena Control</p>
+   196→                </div>
+   197→            </div>
+   198→
+   199→            <div class="sidebar-content">
+   200→                <button @click="configModal = true; sidebarOpen = false" class="nav-link">
+   201→                    <span>⚙️</span> <span>إعدادات اللعبة</span>
+   202→                </button>
+   203→                <a href="../dashboard.php" class="nav-link">
+   204→                    <span>🏠</span> <span>الرئيسية</span>
+   205→                </a>
+   206→                
+   207→                <!-- New Link Here -->
+   208→                <a href="admin_panel.php" class="nav-link text-indigo-400">
+   209→                    <span>👨‍💻</span> <span>لوحة الإدارة (Admin Panel)</span>
+   210→                </a>
+   211→                
+   212→                <div class="my-4 border-t border-[var(--sidebar-border)]"></div>
+   213→                
+   214→                <div class="px-2">
+   215→                    <h3 class="text-xs font-bold text-[var(--text-muted)] mb-2">إحصائيات سريعة</h3>
+   216→                    <div class="space-y-2">
+   217→                        <div class="bg-white/5 p-2 rounded-lg flex justify-between items-center text-xs border border-[var(--glass-border)]">
+   218→                            <span class="text-[var(--text-secondary)]">الطلاب</span>
+   219→                            <span class="font-bold text-indigo-400"><?php echo count($users); ?></span>
+   220→                        </div>
+   221→                        <div class="bg-white/5 p-2 rounded-lg flex justify-between items-center text-xs border border-[var(--glass-border)]">
+   222→                            <span class="text-[var(--text-secondary)]">نشط PvP</span>
+   223→                            <span class="font-bold text-emerald-400"><?php echo count(array_filter($users, function($u){ return strpos($u['real_status'], 'pvp') !== false; })); ?></span>
+   224→                        </div>
+   225→                        <div class="bg-white/5 p-2 rounded-lg flex justify-between items-center text-xs border border-[var(--glass-border)]">
+   226→                            <span class="text-[var(--text-secondary)]">حالة AI</span>
+   227→                            <span class="font-bold <?php echo $settings['ai_status'] ? 'text-emerald-400' : 'text-rose-500'; ?>">
+   228→                                <?php echo $settings['ai_status'] ? 'مفتوح' : 'مغلق'; ?>
+   229→                            </span>
+   230→                        </div>
+   231→                    </div>
+   232→                </div>
+   233→            </div>
+   234→
+   235→            <div class="sidebar-footer">
+   236→                <div class="text-[10px] text-[var(--text-muted)] text-center">
+   237→                    All rights reserved &copy; <?php echo date('Y'); ?>
+   238→                </div>
+   239→            </div>
+   240→        </aside>
+   241→
+   242→        <!-- Main Content Wrapper -->
+   243→        <main class="main-content">
+   244→            
+   245→            <!-- Mobile Header -->
+   246→            <header class="mobile-header">
+   247→                <div class="flex items-center gap-2">
+   248→                     <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+   249→                        <span class="text-sm text-white">🛡️</span>
+   250→                    </div>
+   251→                    <span class="font-bold text-[var(--text-primary)]">غرفة العمليات</span>
+   252→                </div>
+   253→                <div class="flex items-center gap-2">
+   254→                    <!-- Theme Toggle Mobile -->
+   255→                    <button @click="toggleTheme()" class="theme-toggle">
+   256→                        <span x-show="theme === 'dark'">☀️</span>
+   257→                        <span x-show="theme === 'light'">🌙</span>
+   258→                    </button>
+   259→                    <button @click="sidebarOpen = !sidebarOpen" class="p-2 text-[var(--text-primary)] hover:bg-white/10 rounded-lg">
+   260→                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+   261→                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+   262→                        </svg>
+   263→                    </button>
+   264→                </div>
+   265→            </header>
+   266→
+   267→            <div class="p-4 md:p-6 space-y-6">
+   268→                <!-- Toolbar & Filters -->
+   269→                <div class="glass-panel p-4 rounded-2xl flex flex-col md:flex-row gap-4 items-center justify-between sticky top-4 md:top-6 z-30 shadow-2xl mb-6">
+   270→                    <div class="flex flex-wrap gap-2 w-full flex-grow items-center">
+   271→                        <div class="relative flex-grow md:flex-grow-0 md:w-64">
+   272→                            <span class="absolute right-3 top-2.5 text-[var(--text-muted)]">🔍</span>
+   273→                            <input type="text" x-model="search" placeholder="ابحث بالاسم..." class="input-glass pr-10 pl-4 text-sm">
+   274→                        </div>
+   275→                        <select x-model="filterTrainer" class="input-glass text-sm font-bold md:w-40"><option value="all">كل المدربين</option><?php foreach($trainers as $t): ?><option value="<?php echo $t['id']; ?>"><?php echo $t['name']; ?></option><?php endforeach; ?></select>
+   276→                        <select x-model="filterLevel" class="input-glass text-sm font-bold w-24"><option value="all">Lvl All</option><?php for($i=1;$i<=10;$i++): ?><option value="<?php echo $i; ?>">Lvl <?php echo $i; ?></option><?php endfor; ?></select>
+   277→                        
+   278→                        <!-- Theme Toggle Desktop -->
+   279→                        <div class="hidden md:block mr-auto">
+   280→                            <button @click="toggleTheme()" class="theme-toggle" title="تغيير المظهر">
+   281→                                <span x-show="theme === 'dark'">☀️</span>
+   282→                                <span x-show="theme === 'light'">🌙</span>
+   283→                            </button>
+   284→                        </div>
+   285→                    </div>
+   286→                </div>
+   287→
+   288→                <!-- Users Grid -->
+   289→                <div class="grid grid-cols-1 gap-3 pb-10">
+   290→                    <?php foreach($users as $u): 
+   291→                        $isActivePvP = strpos($u['real_status'], 'pvp') !== false;
+   292→                        $isActiveAI = $u['real_status'] === 'ai';
+   293→                        $isOnline = strtotime($u['last_activity']) > time() - 120;
+   294→                        // Logic for status styling remains, but updated to use glass classes
+   295→                        $borderClass = $isActivePvP ? "border-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.1)] bg-rose-900/10" : ($isActiveAI ? "border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.1)] bg-amber-900/10" : ($isOnline ? "border-emerald-500/30" : "border-transparent"));
+   296→                        $aiUsed = intval($u['ai_attempts_count']); $aiLimit = $settings['ai_daily_limit']; $aiPercent = min(100, ($aiUsed / $aiLimit) * 100);
+   297→                    ?>
+   298→                    <div x-show="(search === '' || '<?php echo $u['student_name']; ?>'.includes(search)) && (filterTrainer === 'all' || filterTrainer == '<?php echo $u['trainer_id']; ?>') && (filterLevel === 'all' || filterLevel == '<?php echo $u['level']; ?>')" class="glass-panel p-3 md:p-4 hover:bg-[var(--card-hover)] <?php echo $borderClass; ?>">
+   299→                        <div class="flex flex-col md:flex-row gap-4 items-center">
+   300→                            
+   301→                            <!-- User Info -->
+   302→                            <div class="flex items-center gap-3 w-full md:w-1/4">
+   303→                                <div class="relative">
+   304→                                    <div class="w-12 h-12 rounded-xl bg-[var(--input-bg)] flex items-center justify-center font-bold text-lg text-[var(--text-secondary)] border border-[var(--glass-border)]">
+   305→                                        <?php echo mb_substr($u['student_name'], 0, 1); ?>
+   306→                                    </div>
+   307→                                    <?php if($isOnline): ?><span class="absolute -bottom-1 -right-1 flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span><?php endif; ?>
+   308→                                </div>
+   309→                                <div class="min-w-0">
+   310→                                    <h3 class="font-bold text-sm text-[var(--text-primary)] truncate"><?php echo $u['student_name']; ?></h3>
+   311→                                    <div class="text-[10px] text-[var(--text-muted)] flex items-center gap-2">
+   312→                                        <span class="bg-[var(--card-hover)] px-1.5 py-0.5 rounded text-indigo-400 border border-[var(--glass-border)]">Lv.<?php echo $u['level']; ?></span>
+   313→                                        <span class="truncate max-w-[100px]"><?php echo $u['trainer_name'] ?? '-'; ?></span>
+   314→                                    </div>
+   315→                                </div>
+   316→                            </div>
+   317→
+   318→                            <!-- Status & Actions -->
+   319→                            <div class="w-full md:w-1/4 flex flex-col justify-center">
+   320→                                <?php if($isActivePvP): $opp = explode(':', $u['real_status'])[1]; ?>
+   321→                                    <div class="flex items-center gap-2 text-rose-400 font-bold text-xs justify-center md:justify-start animate-pulse"><span>⚔️</span> <span>ضد: <?php echo $opp; ?></span></div>
+   322→                                    <form method="POST" onsubmit="return confirm('إنهاء المباراة؟')" class="flex gap-1 mt-1 justify-center md:justify-start">
+   323→                                        <input type="hidden" name="match_id" value="<?php echo $u['active_match_id']; ?>">
+   324→                                        <button name="live_action" value="1" class="hidden"></button>
+   325→                                        <button name="act_type" value="cancel" class="bg-slate-700/50 hover:bg-rose-600 text-[10px] px-2 py-0.5 rounded text-white transition border border-[var(--glass-border)]">⛔ إلغاء</button>
+   326→                                        <button name="act_type" value="win_p1" class="bg-slate-700/50 hover:bg-emerald-600 text-[10px] px-2 py-0.5 rounded text-white transition border border-[var(--glass-border)]">🏆 فوز 1</button>
+   327→                                    </form>
+   328→                                <?php elseif($isActiveAI): ?>
+   329→                                    <div class="text-amber-400 font-bold text-xs text-center md:text-right">🤖 يلعب مع الروبوت</div>
+   330→                                <?php else: ?>
+   331→                                    <div class="text-[var(--text-muted)] text-xs text-center md:text-right">في الانتظار...</div>
+   332→                                <?php endif; ?>
+   333→                            </div>
+   334→
+   335→                            <!-- AI Attempts Control -->
+   336→                            <div class="w-full md:w-1/4">
+   337→                                <div class="flex justify-between text-[10px] font-bold text-[var(--text-secondary)] mb-1">
+   338→                                    <span>محاولات: <span class="<?php echo $aiUsed >= $aiLimit ? 'text-rose-400' : 'text-blue-400'; ?>"><?php echo $aiUsed; ?></span>/<?php echo $aiLimit; ?></span>
+   339→                                    <form method="POST" class="flex items-center gap-1 bg-[var(--input-bg)] p-0.5 rounded-lg border border-[var(--glass-border)]">
+   340→                                        <input type="hidden" name="user_id" value="<?php echo $u['id']; ?>"><input type="hidden" name="adjust_ai" value="1">
+   341→                                        <input type="number" name="ai_amount" value="1" min="1" class="w-8 h-5 bg-transparent text-center text-[10px] text-[var(--text-primary)] font-bold border-none outline-none focus:ring-0 p-0">
+   342→                                        <button type="submit" name="dir" value="give" title="منح" class="px-1.5 h-5 bg-emerald-600 hover:bg-emerald-500 rounded text-white text-[9px] font-bold transition flex items-center">+</button>
+   343→                                        <button type="submit" name="dir" value="take" title="خصم" class="px-1.5 h-5 bg-rose-600 hover:bg-rose-500 rounded text-white text-[9px] font-bold transition flex items-center">-</button>
+   344→                                        <button type="submit" name="dir" value="reset" title="تصفير" class="px-1.5 h-5 bg-slate-600 hover:bg-slate-500 rounded text-white text-[9px] font-bold transition flex items-center">↻</button>
+   345→                                    </form>
+   346→                                </div>
+   347→                                <div class="h-1.5 bg-[var(--glass-border)] rounded-full overflow-hidden mb-1">
+   348→                                    <div class="h-full <?php echo $aiUsed >= $aiLimit ? 'bg-rose-500' : 'bg-blue-500'; ?> transition-all duration-500" style="width: <?php echo $aiPercent; ?>%"></div>
+   349→                                </div>
+   350→                            </div>
+   351→
+   352→                            <!-- Quick Update Form -->
+   353→                            <form method="POST" class="w-full md:w-1/4 flex items-center gap-2 justify-end">
+   354→                                <input type="hidden" name="user_id" value="<?php echo $u['id']; ?>">
+   355→                                <input type="number" name="pvp_points" value="<?php echo $u['pvp_points']; ?>" class="input-glass w-16 text-center text-xs h-8 font-bold p-1" placeholder="Pts">
+   356→                                <select name="level" class="input-glass w-14 text-center text-xs h-8 font-bold p-1 pl-4">
+   357→                                    <?php for($i=1;$i<=10;$i++): ?>
+   358→                                        <option value="<?php echo $i; ?>" <?php if($u['level']==$i) echo 'selected'; ?>><?php echo $i; ?></option>
+   359→                                    <?php endfor; ?>
+   360→                                </select>
+   361→                                <button type="submit" name="quick_update" class="bg-indigo-600 hover:bg-indigo-500 text-white w-8 h-8 rounded text-xs font-bold shadow-lg transition">✓</button>
+   362→                                <button type="button" @click="openHistory(<?php echo $u['id']; ?>)" class="bg-[var(--glass-border)] hover:bg-[var(--card-hover)] text-[var(--text-primary)] w-8 h-8 rounded text-xs font-bold shadow-lg transition">📜</button>
+   363→                            </form>
+   364→
+   365→                        </div>
+   366→                    </div>
+   367→                    <?php endforeach; ?>
+   368→                </div>
+   369→
+   370→            </div>
+   371→        </main>
+   372→    </div>
+   373→
+   374→    <!-- Game Config Modal (Uses Glass Variables) -->
+   375→    <div x-show="configModal" style="display: none;" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" x-transition.opacity>
+   376→       <div class="glass-panel w-full max-w-2xl shadow-2xl relative max-h-[90vh] overflow-y-auto bg-[var(--bg-primary)]" @click.outside="configModal = false">
+   377→            <form method="POST" class="p-6 space-y-6">
+   378→                <div class="flex justify-between items-center border-b border-[var(--glass-border)] pb-4">
+   379→                    <h3 class="text-xl font-bold text-[var(--text-primary)]">⚙️ إعدادات التحكم</h3>
+   380→                    <button type="button" @click="configModal = false" class="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition">✕</button>
+   381→                </div>
+   382→                 <div class="bg-[var(--input-bg)] p-4 rounded-xl border border-[var(--glass-border)]">
+   383→                    <div class="flex justify-between items-center mb-4">
+   384→                        <div class="flex items-center gap-2"><span class="text-2xl">🤖</span><span class="text-sm font-bold text-[var(--text-secondary)]">الروبوت (AI)</span></div>
+   385→                        <label class="relative inline-flex items-center cursor-pointer"><input type="checkbox" name="ai_status" value="1" class="sr-only peer" <?php if($settings['ai_status']) echo 'checked'; ?>><div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div><span class="ml-3 text-xs font-bold text-[var(--text-muted)]">تفعيل</span></label>
+   386→                    </div>
+   387→                    <div class="grid grid-cols-2 gap-4">
+   388→                        <div><label class="block text-[10px] text-[var(--text-muted)] mb-1">الحد اليومي</label><input type="number" name="ai_daily_limit" value="<?php echo $settings['ai_daily_limit']; ?>" class="input-glass text-sm"></div>
+   389→                        <div><label class="block text-[10px] text-[var(--text-muted)] mb-1">رسالة الإغلاق</label><input type="text" name="ai_msg" value="<?php echo $settings['ai_msg']; ?>" class="input-glass text-sm text-rose-400"></div>
+   390→                    </div>
+   391→                </div>
+   392→                <!-- Tiers (Sample Tier 1 - Repeat structure for others if needed) -->
+   393→                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+   394→                     <!-- Bronz -->
+   395→                     <div class="bg-amber-900/10 border border-amber-500/30 p-4 rounded-xl relative overflow-hidden">
+   396→                         <div class="flex justify-between items-center mb-3"><div class="text-amber-500 font-bold text-sm flex items-center gap-1">🥉 البرونزي</div><label class="relative inline-flex items-center cursor-pointer scale-75 origin-right"><input type="checkbox" name="tier1_status" value="1" class="sr-only peer" <?php if($settings['tier1_status']) echo 'checked'; ?>><div class="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div></label></div>
+   397→                         <div class="space-y-2 text-xs">
+   398→                             <input type="text" name="tier1_msg" value="<?php echo $settings['tier1_msg']; ?>" placeholder="رسالة الغلق" class="input-glass mb-2 border-rose-500/20 text-rose-400">
+   399→                             <div class="flex justify-between items-center"><span class="text-[var(--text-muted)]">سؤال:</span><input type="number" name="tier1_q" value="<?php echo $settings['tier1_q']; ?>" class="input-glass w-12 text-center p-1"></div>
+   400→                             <div class="flex justify-between items-center"><span class="text-[var(--text-muted)]">وقت:</span><input type="number" name="tier1_time" value="<?php echo $settings['tier1_time']; ?>" class="input-glass w-12 text-center p-1"></div>
+   401→                             <div class="flex justify-between items-center"><span class="text-green-500">فوز:</span><input type="number" name="tier1_win" value="<?php echo $settings['tier1_win']; ?>" class="input-glass w-12 text-center border-green-500/30 p-1"></div>
+   402→                             <div class="flex justify-between items-center"><span class="text-rose-500">خسارة:</span><input type="number" name="tier1_loss" value="<?php echo $settings['tier1_loss']; ?>" class="input-glass w-12 text-center border-rose-500/30 p-1"></div>
+   403→                         </div>
+   404→                     </div>
+   405→                     <!-- Silver & Gold (Use same structure) -->
+   406→                     <div class="bg-blue-900/10 border border-blue-500/30 p-4 rounded-xl relative overflow-hidden"><div class="flex justify-between items-center mb-3"><div class="text-blue-500 font-bold text-sm flex items-center gap-1">🥈 الفضي</div><label class="relative inline-flex items-center cursor-pointer scale-75 origin-right"><input type="checkbox" name="tier2_status" value="1" class="sr-only peer" <?php if($settings['tier2_status']) echo 'checked'; ?>><div class="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div></label></div><div class="space-y-2 text-xs"><input type="text" name="tier2_msg" value="<?php echo $settings['tier2_msg']; ?>" placeholder="رسالة الغلق" class="input-glass mb-2 border-rose-500/20 text-rose-400"><div class="flex justify-between items-center"><span class="text-[var(--text-muted)]">سؤال:</span><input type="number" name="tier2_q" value="<?php echo $settings['tier2_q']; ?>" class="input-glass w-12 text-center p-1"></div><div class="flex justify-between items-center"><span class="text-[var(--text-muted)]">وقت:</span><input type="number" name="tier2_time" value="<?php echo $settings['tier2_time']; ?>" class="input-glass w-12 text-center p-1"></div><div class="flex justify-between items-center"><span class="text-green-500">فوز:</span><input type="number" name="tier2_win" value="<?php echo $settings['tier2_win']; ?>" class="input-glass w-12 text-center border-green-500/30 p-1"></div><div class="flex justify-between items-center"><span class="text-rose-500">خسارة:</span><input type="number" name="tier2_loss" value="<?php echo $settings['tier2_loss']; ?>" class="input-glass w-12 text-center border-rose-500/30 p-1"></div></div></div>
+   407→                     <div class="bg-pink-900/10 border border-pink-500/30 p-4 rounded-xl relative overflow-hidden"><div class="flex justify-between items-center mb-3"><div class="text-pink-500 font-bold text-sm flex items-center gap-1">🥇 الذهبي</div><label class="relative inline-flex items-center cursor-pointer scale-75 origin-right"><input type="checkbox" name="tier3_status" value="1" class="sr-only peer" <?php if($settings['tier3_status']) echo 'checked'; ?>><div class="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div></label></div><div class="space-y-2 text-xs"><input type="text" name="tier3_msg" value="<?php echo $settings['tier3_msg']; ?>" placeholder="رسالة الغلق" class="input-glass mb-2 border-rose-500/20 text-rose-400"><div class="flex justify-between items-center"><span class="text-[var(--text-muted)]">سؤال:</span><input type="number" name="tier3_q" value="<?php echo $settings['tier3_q']; ?>" class="input-glass w-12 text-center p-1"></div><div class="flex justify-between items-center"><span class="text-[var(--text-muted)]">وقت:</span><input type="number" name="tier3_time" value="<?php echo $settings['tier3_time']; ?>" class="input-glass w-12 text-center p-1"></div><div class="flex justify-between items-center"><span class="text-green-500">فوز:</span><input type="number" name="tier3_win" value="<?php echo $settings['tier3_win']; ?>" class="input-glass w-12 text-center border-green-500/30 p-1"></div><div class="flex justify-between items-center"><span class="text-rose-500">خسارة:</span><input type="number" name="tier3_loss" value="<?php echo $settings['tier3_loss']; ?>" class="input-glass w-12 text-center border-rose-500/30 p-1"></div></div></div>
+   408→                </div>
+   409→                <div class="pt-4 border-t border-[var(--glass-border)] flex justify-end">
+   410→                    <button type="submit" name="save_game_config" class="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-xl font-bold transition shadow-lg shadow-emerald-500/20">حفظ التغييرات</button>
+   411→                </div>
+   412→            </form>
+   413→       </div>
+   414→    </div>
+   415→
+   416→    <!-- History Modal -->
+   417→    <div x-show="historyModal" style="display: none;" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" x-transition.opacity>
+   418→         <div class="glass-panel w-full max-w-3xl h-[80vh] flex flex-col shadow-2xl relative bg-[var(--bg-primary)]" @click.outside="historyModal = false">
+   419→            <div class="p-4 border-b border-[var(--glass-border)] flex justify-between items-center bg-[var(--input-bg)] rounded-t-2xl"><div class="flex items-center gap-3"><span class="text-xl">📜</span><div><h3 class="font-bold text-[var(--text-primary)] text-lg" x-text="historyName"></h3><p class="text-xs text-[var(--text-muted)]">سجل المباريات والتحديات</p></div></div><button @click="historyModal = false" class="bg-[var(--glass-border)] hover:bg-rose-600 w-8 h-8 rounded-full flex items-center justify-center text-[var(--text-primary)] transition font-bold">✕</button></div>
+   420→            <div class="flex-grow overflow-y-auto p-4 space-y-2"><div x-show="historyLoading" class="flex flex-col items-center justify-center h-full text-[var(--text-muted)]"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500 mb-2"></div><p>جاري جلب السجل...</p></div><div x-show="!historyLoading && historyItems.length === 0" class="flex flex-col items-center justify-center h-full text-[var(--text-muted)]"><span class="text-4xl mb-2">📭</span><p>لا يوجد سجل.</p></div><template x-for="h in historyItems" :key="h.id"><div class="bg-[var(--card-hover)] p-3 rounded-xl flex justify-between items-center hover:bg-[var(--glass-border)] transition group border border-[var(--glass-border)]"><div class="flex items-center gap-3"><div class="text-xs text-[var(--text-muted)] font-mono" x-text="formatDate(h.created_at)"></div><div class="font-bold text-sm text-[var(--text-primary)]"><span x-text="h.type === 'ai' ? '🤖 AI' : '⚔️ PvP'"></span> <span class="text-[var(--text-muted)] text-xs mx-1">vs</span> <span class="text-indigo-400" x-text="h.opp"></span></div></div><div class="flex items-center gap-4"><div class="font-bold text-sm uppercase" :class="h.res === 'win' ? 'text-emerald-500' : (h.res === 'loss' ? 'text-rose-500' : 'text-slate-400')" x-text="h.res"></div><div class="font-mono text-xs text-amber-500"><span x-text="h.pts"></span> pts</div><button @click="deleteItem(h.id, h.type)" class="text-[var(--text-muted)] hover:text-rose-500 opacity-0 group-hover:opacity-100 transition">🗑️</button></div></div></template></div>
+   421→            <div class="p-4 border-t border-[var(--glass-border)] bg-[var(--input-bg)] rounded-b-2xl flex justify-between items-center" x-show="historyItems.length > 0"><span class="text-xs text-[var(--text-muted)]">⚠️ الحذف نهائي.</span><form method="POST" onsubmit="return confirm('تصفير الكل؟')"><input type="hidden" name="h_user_id" :value="historyUserId"><input type="hidden" name="history_action" value="wipe_all"><button type="submit" class="text-xs font-bold text-rose-400 hover:text-rose-300 bg-rose-900/20 hover:bg-rose-900/40 px-3 py-1.5 rounded-lg transition">🔥 تصفير السجل</button></form></div>
+   422→        </div>
+   423→    </div>
+   424→
+   425→    <script>
+   426→        function adminApp() {
+   427→            return {
+   428→                sidebarOpen: false,
+   429→                search: '', 
+   430→                filterTrainer: 'all', 
+   431→                filterLevel: 'all', 
+   432→                historyModal: false, 
+   433→                configModal: false, 
+   434→                historyLoading: false, 
+   435→                historyItems: [], 
+   436→                historyName: '', 
+   437→                historyUserId: null,
+   438→                
+   439→                // Theme Logic
+   440→                theme: localStorage.getItem('theme') || 'dark',
+   441→                toggleTheme() {
+   442→                    this.theme = this.theme === 'dark' ? 'light' : 'dark';
+   443→                    localStorage.setItem('theme', this.theme);
+   444→                },
+   445→
+   446→                async openHistory(uid) {
+   447→                    this.historyModal = true; this.historyLoading = true; this.historyUserId = uid; this.historyItems = [];
+   448→                    try { const res = await fetch(`?ajax_history=${uid}`); const data = await res.json(); this.historyName = data.name; this.historyItems = data.data; } catch (e) {} finally { this.historyLoading = false; }
+   449→                },
+   450→                async deleteItem(id, type) {
+   451→                    if(!confirm('حذف؟')) return;
+   452→                    const formData = new FormData(); formData.append('ajax_delete_history', 1); formData.append('item_id', id); formData.append('item_type', type);
+   453→                    try { const res = await fetch('admin_arena.php', { method: 'POST', body: formData }); const result = await res.json(); if(result.status === 'success') { this.historyItems = this.historyItems.filter(h => h.id !== id); } } catch (e) {}
+   454→                },
+   455→                formatDate(dateString) { const date = new Date(dateString); return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' }) + ' ' + date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }); }
+   456→            }
+   457→        }
+   458→    </script>
+   459→    
+   460→    <?php if($flashMsg): ?>
+   461→    <script>
+   462→        Swal.fire({ 
+   463→            toast: true, 
+   464→            position: 'top-end', 
+   465→            icon: '<?php echo $flashMsg['type']; ?>', 
+   466→            title: '<?php echo $flashMsg['text']; ?>', 
+   467→            showConfirmButton: false, 
+   468→            timer: 3000, 
+   469→            background: 'var(--glass-bg)', 
+   470→            color: 'var(--text-primary)' 
+   471→        });
+   472→    </script>
+   473→    <?php endif; ?>
+   474→</body>
+   475→</html>

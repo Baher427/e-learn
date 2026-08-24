@@ -1,0 +1,594 @@
+     1→<?php
+     2→// --- إعدادات النظام ---
+     3→ini_set('display_errors', 0); 
+     4→error_reporting(E_ALL);
+     5→
+     6→include 'config.php';
+     7→
+     8→// التحقق من صلاحية المدير
+     9→if (!isset($_SESSION['is_admin']) || !$_SESSION['is_admin']) {
+    10→    header('Location: login.php');
+    11→    exit;
+    12→}
+    13→
+    14→// معالجة الرسائل (للحفظ في متغيرات جافاسكريبت لاحقاً)
+    15→$flash_success = $_SESSION['flash_success'] ?? '';
+    16→$flash_error = $_SESSION['flash_error'] ?? '';
+    17→unset($_SESSION['flash_success'], $_SESSION['flash_error']);
+    18→
+    19→// --- معالجة الطلبات (POST Requests) ---
+    20→if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    21→    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+    22→        $_SESSION['flash_error'] = 'خطأ أمني. أعد المحاولة.';
+    23→    } else {
+    24→        // 1. إضافة مدرب
+    25→        if (isset($_POST['add_trainer'])) {
+    26→            $name = trim($_POST['trainer_name']);
+    27→            $phone = trim($_POST['trainer_phone']);
+    28→            if (empty($name) || !preg_match('/^\d{11}$/', $phone)) {
+    29→                $_SESSION['flash_error'] = 'بيانات المدرب غير صحيحة.';
+    30→            } else {
+    31→                try {
+    32→                    $pdo->prepare("INSERT INTO trainers (name, phone) VALUES (?, ?)")->execute([$name, $phone]);
+    33→                    $_SESSION['flash_success'] = "تم إضافة المدرب بنجاح.";
+    34→                } catch (PDOException $e) {
+    35→                    $_SESSION['flash_error'] = 'رقم الهاتف مسجل مسبقاً.';
+    36→                }
+    37→            }
+    38→        }
+    39→        // 2. تعديل مدرب
+    40→        elseif (isset($_POST['edit_trainer'])) {
+    41→            $id = filter_input(INPUT_POST, 'trainer_id', FILTER_VALIDATE_INT);
+    42→            $name = trim($_POST['trainer_name']);
+    43→            $phone = trim($_POST['trainer_phone']);
+    44→            if ($id && $name) {
+    45→                $pdo->prepare("UPDATE trainers SET name = ?, phone = ? WHERE id = ?")->execute([$name, $phone, $id]);
+    46→                $_SESSION['flash_success'] = "تم تحديث البيانات.";
+    47→            }
+    48→        }
+    49→        // 3. حذف مدرب
+    50→        elseif (isset($_POST['delete_trainer'])) {
+    51→            $id = filter_input(INPUT_POST, 'trainer_id_to_delete', FILTER_VALIDATE_INT);
+    52→            if ($id) {
+    53→                $pdo->beginTransaction();
+    54→                $pdo->prepare("UPDATE users SET trainer_id = NULL WHERE trainer_id = ?")->execute([$id]);
+    55→                $pdo->prepare("DELETE FROM trainers WHERE id = ?")->execute([$id]);
+    56→                $pdo->commit();
+    57→                $_SESSION['flash_success'] = "تم الحذف بنجاح.";
+    58→            }
+    59→        }
+    60→        // 4. فك ارتباط طالب فردي
+    61→        elseif (isset($_POST['unassign_student'])) {
+    62→            $sid = filter_input(INPUT_POST, 'student_id_to_unassign', FILTER_VALIDATE_INT);
+    63→            if ($sid) {
+    64→                $pdo->prepare("UPDATE users SET trainer_id = NULL WHERE id = ?")->execute([$sid]);
+    65→                $_SESSION['flash_success'] = "تم فك ارتباط الطالب.";
+    66→            }
+    67→        }
+    68→        // 5. تغيير المستوى
+    69→        elseif (isset($_POST['update_student_level'])) {
+    70→            $sid = filter_input(INPUT_POST, 'student_id', FILTER_VALIDATE_INT);
+    71→            $level = filter_input(INPUT_POST, 'new_level', FILTER_VALIDATE_INT);
+    72→            if ($sid && $level) {
+    73→                $pdo->prepare("UPDATE users SET level = ? WHERE id = ?")->execute([$level, $sid]);
+    74→                $_SESSION['flash_success'] = "تم تحديث المستوى.";
+    75→            }
+    76→        }
+    77→        // 6. تعيين جماعي للطلاب
+    78→        elseif (isset($_POST['bulk_assign_students'])) {
+    79→            $student_ids = $_POST['selected_students'] ?? [];
+    80→            $trainer_id = filter_input(INPUT_POST, 'target_trainer_id', FILTER_VALIDATE_INT);
+    81→            
+    82→            if (!empty($student_ids) && $trainer_id) {
+    83→                $placeholders = implode(',', array_fill(0, count($student_ids), '?'));
+    84→                $params = array_merge([$trainer_id], $student_ids);
+    85→                $stmt = $pdo->prepare("UPDATE users SET trainer_id = ? WHERE id IN ($placeholders)");
+    86→                $stmt->execute($params);
+    87→                $_SESSION['flash_success'] = "تم تعيين " . count($student_ids) . " طالب للمدرب بنجاح.";
+    88→            } else {
+    89→                $_SESSION['flash_error'] = "الرجاء اختيار طلاب ومدرب.";
+    90→            }
+    91→        }
+    92→        // 7. تعيين طالب فردي
+    93→        elseif (isset($_POST['assign_student'])) {
+    94→            $sid = filter_input(INPUT_POST, 'student_id', FILTER_VALIDATE_INT);
+    95→            $tid = filter_input(INPUT_POST, 'trainer_id', FILTER_VALIDATE_INT);
+    96→            if ($sid && $tid) {
+    97→                $pdo->prepare("UPDATE users SET trainer_id = ? WHERE id = ?")->execute([$tid, $sid]);
+    98→                $_SESSION['flash_success'] = "تم ربط الطالب.";
+    99→            }
+   100→        }
+   101→    }
+   102→    header('Location: trainers-dashboard.php');
+   103→    exit;
+   104→}
+   105→
+   106→$_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+   107→
+   108→// --- جلب البيانات ---
+   109→$trainers = $pdo->query("SELECT * FROM trainers ORDER BY name ASC")->fetchAll();
+   110→$unassigned_students = $pdo->query("SELECT id, student_name, level FROM users WHERE trainer_id IS NULL ORDER BY student_name ASC")->fetchAll();
+   111→
+   112→$total_trainers = count($trainers);
+   113→$total_assigned = $pdo->query("SELECT COUNT(*) FROM users WHERE trainer_id IS NOT NULL")->fetchColumn();
+   114→$total_unassigned = count($unassigned_students);
+   115→?>
+   116→<!DOCTYPE html>
+   117→<html lang="ar" dir="rtl">
+   118→<head>
+   119→    <meta charset="UTF-8">
+   120→    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   121→    <title>إدارة المدربين والطلاب</title>
+   122→    <script src="https://cdn.tailwindcss.com"></script>
+   123→    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+   124→    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
+   125→    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+   126→    
+   127→    <style>
+   128→        body { font-family: 'Cairo', sans-serif; background-color: #f8fafc; }
+   129→        
+   130→        .glass-header {
+   131→            background: rgba(255, 255, 255, 0.95);
+   132→            backdrop-filter: blur(12px);
+   133→            border-bottom: 1px solid rgba(0,0,0,0.05);
+   134→        }
+   135→        
+   136→        /* شريط الإحصائيات */
+   137→        .stats-bar {
+   138→            background: linear-gradient(to right, #ffffff, #f0f9ff);
+   139→            border-bottom: 1px solid #e0f2fe;
+   140→        }
+   141→
+   142→        /* Custom Scrollbar */
+   143→        ::-webkit-scrollbar { width: 6px; height: 6px; }
+   144→        ::-webkit-scrollbar-track { background: transparent; }
+   145→        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+   146→        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+   147→
+   148→        /* Checkbox Style */
+   149→        .checkbox-wrapper input:checked + div {
+   150→            background-color: #4f46e5;
+   151→            border-color: #4f46e5;
+   152→        }
+   153→        .checkbox-wrapper input:checked + div svg { display: block; }
+   154→        
+   155→        /* Modal Transition */
+   156→        .modal { transition: opacity 0.25s ease; }
+   157→        body.modal-active { overflow-x: hidden; overflow-y: hidden !important; }
+   158→
+   159→        /* Student Item Selection Style */
+   160→        .student-select-row { transition: background-color 0.2s; }
+   161→        .student-select-row:has(input:checked) { background-color: #eef2ff; border-color: #c7d2fe; }
+   162→    </style>
+   163→</head>
+   164→<body class="bg-slate-50 text-slate-800 min-h-screen pb-10">
+   165→
+   166→    <!-- 1. Main Header (Search & Add) -->
+   167→    <nav class="glass-header shadow-sm sticky top-0 z-50">
+   168→        <div class="container mx-auto px-4 py-2">
+   169→            <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+   170→                
+   171→                <!-- Title & Back -->
+   172→                <div class="flex items-center gap-3">
+   173→                    <a href="admin_panel.php" class="w-9 h-9 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 flex items-center justify-center transition shadow-sm">
+   174→                        <i class="fas fa-arrow-right"></i>
+   175→                    </a>
+   176→                    <h1 class="font-bold text-base text-slate-800 hidden md:block">إدارة المدربين</h1>
+   177→                </div>
+   178→
+   179→                <!-- Search Bar -->
+   180→                <div class="flex-grow max-w-lg w-full relative group mx-auto">
+   181→                    <i class="fas fa-search absolute top-1/2 right-4 transform -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 transition"></i>
+   182→                    <input type="text" id="globalSearch" placeholder="ابحث عن مدرب أو طالب..." class="w-full bg-slate-100/50 border border-slate-200 text-sm rounded-full py-2 pr-10 pl-4 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition shadow-sm">
+   183→                </div>
+   184→
+   185→                <!-- Add Trainer Button -->
+   186→                <button onclick="toggleModal('addTrainerModal')" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-lg shadow-indigo-200 transition flex items-center gap-2 flex-shrink-0">
+   187→                    <i class="fas fa-user-plus"></i> <span>مدرب جديد</span>
+   188→                </button>
+   189→            </div>
+   190→        </div>
+   191→    </nav>
+   192→
+   193→    <!-- 2. Stats Bar (New Feature) -->
+   194→    <div class="stats-bar py-2 shadow-sm sticky top-[60px] z-40">
+   195→        <div class="container mx-auto px-4">
+   196→            <div class="flex justify-around items-center gap-4 text-center">
+   197→                <div class="flex flex-col items-center">
+   198→                    <span class="text-[10px] text-slate-400 font-bold uppercase">المدربين</span>
+   199→                    <span class="text-lg font-black text-indigo-600 leading-none"><?= $total_trainers ?></span>
+   200→                </div>
+   201→                <div class="w-px h-8 bg-slate-200"></div>
+   202→                <div class="flex flex-col items-center">
+   203→                    <span class="text-[10px] text-slate-400 font-bold uppercase">الطلاب</span>
+   204→                    <span class="text-lg font-black text-emerald-600 leading-none"><?= $total_assigned ?></span>
+   205→                </div>
+   206→                <div class="w-px h-8 bg-slate-200"></div>
+   207→                <div class="flex flex-col items-center">
+   208→                    <span class="text-[10px] text-slate-400 font-bold uppercase">بلا مدرب</span>
+   209→                    <span class="text-lg font-black text-amber-600 leading-none"><?= $total_unassigned ?></span>
+   210→                </div>
+   211→            </div>
+   212→        </div>
+   213→    </div>
+   214→
+   215→    <div class="container mx-auto px-4 py-6">
+   216→
+   217→        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+   218→            
+   219→            <!-- 3. Unassigned Students Card (Fixed Height + Sticky Footer) -->
+   220→            <div class="lg:col-span-1 lg:order-last">
+   221→                <div class="bg-white rounded-2xl border-2 border-amber-100 shadow-lg overflow-hidden sticky top-32 flex flex-col" style="max-height: calc(100vh - 150px);">
+   222→                    <!-- Header -->
+   223→                    <div class="bg-amber-50/80 p-3 border-b border-amber-100 flex items-center justify-between flex-shrink-0">
+   224→                        <div class="flex items-center gap-2">
+   225→                            <div class="w-8 h-8 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center"><i class="fas fa-user-clock"></i></div>
+   226→                            <div>
+   227→                                <h3 class="font-bold text-slate-800 text-sm">طلاب بلا مدرب</h3>
+   228→                                <p class="text-[10px] text-slate-500">حدد ثم اختر المدرب</p>
+   229→                            </div>
+   230→                        </div>
+   231→                        <!-- Select All Checkbox -->
+   232→                        <label class="checkbox-wrapper flex items-center cursor-pointer p-1 hover:bg-amber-100 rounded transition">
+   233→                            <input type="checkbox" id="selectAllUnassigned" class="sr-only">
+   234→                            <div class="w-5 h-5 border-2 border-slate-300 rounded bg-white transition flex items-center justify-center hover:border-indigo-400">
+   235→                                <svg class="w-3 h-3 text-white hidden pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+   236→                            </div>
+   237→                        </label>
+   238→                    </div>
+   239→                    
+   240→                    <form method="POST" id="bulkAssignForm" class="flex flex-col flex-grow overflow-hidden">
+   241→                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+   242→                        
+   243→                        <!-- List (Scrollable Area) -->
+   244→                        <div class="overflow-y-auto p-2 space-y-1 custom-scrollbar flex-grow pb-20"> <!-- Added padding bottom for safety -->
+   245→                            <?php if(empty($unassigned_students)): ?>
+   246→                                <div class="py-12 text-center text-slate-400 flex flex-col items-center">
+   247→                                    <div class="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-2">
+   248→                                        <i class="fas fa-check text-emerald-400 text-2xl"></i>
+   249→                                    </div>
+   250→                                    <p class="text-xs">كل الطلاب لديهم مدربين</p>
+   251→                                </div>
+   252→                            <?php else: ?>
+   253→                                <?php foreach($unassigned_students as $st): ?>
+   254→                                    <label class="student-select-row flex items-center gap-3 p-2.5 rounded-xl border border-transparent hover:border-slate-200 cursor-pointer student-item-free group" data-name="<?= htmlspecialchars($st['student_name']) ?>">
+   255→                                        <div class="checkbox-wrapper">
+   256→                                            <input type="checkbox" name="selected_students[]" value="<?= $st['id'] ?>" class="student-checkbox sr-only">
+   257→                                            <div class="w-5 h-5 border-2 border-slate-300 rounded bg-white transition flex items-center justify-center">
+   258→                                                <svg class="w-3 h-3 text-white hidden pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+   259→                                            </div>
+   260→                                        </div>
+   261→                                        <div class="flex-grow min-w-0">
+   262→                                            <span class="block text-sm font-bold text-slate-700 truncate"><?= htmlspecialchars($st['student_name']) ?></span>
+   263→                                        </div>
+   264→                                        <button type="button" onclick="event.preventDefault(); openLevelModal(<?= $st['id'] ?>, '<?= htmlspecialchars($st['student_name']) ?>', <?= $st['level'] ?? 1 ?>)" class="text-[10px] font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded border border-indigo-100 transition z-10">
+   265→                                            Lv.<?= $st['level'] ?? 1 ?> <i class="fas fa-pencil-alt ml-1"></i>
+   266→                                        </button>
+   267→                                    </label>
+   268→                                <?php endforeach; ?>
+   269→                            <?php endif; ?>
+   270→                        </div>
+   271→
+   272→                        <!-- Action Footer (Fixed at bottom of card) -->
+   273→                        <div id="bulkActionBar" class="bg-slate-800 p-3 flex items-center gap-2 shadow-inner flex-shrink-0 translate-y-full transition-transform duration-300">
+   274→                            <div class="bg-slate-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg flex-shrink-0">
+   275→                                <span id="selectedCount">0</span> طالب
+   276→                            </div>
+   277→                            <select name="target_trainer_id" class="bg-slate-600 text-white text-xs rounded-lg border-none py-2 px-3 flex-grow focus:ring-1 focus:ring-indigo-500" required>
+   278→                                <option value="" selected disabled>اختر المدرب...</option>
+   279→                                <?php foreach($trainers as $t): ?>
+   280→                                    <option value="<?= $t['id'] ?>"><?= htmlspecialchars($t['name']) ?></option>
+   281→                                <?php endforeach; ?>
+   282→                            </select>
+   283→                            <button type="submit" name="bulk_assign_students" class="bg-emerald-500 hover:bg-emerald-600 text-white w-9 h-9 rounded-lg flex items-center justify-center shadow-lg transition flex-shrink-0">
+   284→                                <i class="fas fa-check"></i>
+   285→                            </button>
+   286→                        </div>
+   287→                    </form>
+   288→                </div>
+   289→            </div>
+   290→
+   291→            <!-- 4. Trainers Grid -->
+   292→            <div class="col-lg-2 lg:col-span-2">
+   293→                <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="trainersGrid">
+   294→                    <?php foreach ($trainers as $trainer): ?>
+   295→                        <div class="trainer-wrapper" data-name="<?= htmlspecialchars($trainer['name']) ?>">
+   296→                            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition duration-300 overflow-hidden h-full flex flex-col">
+   297→                                <!-- Trainer Info -->
+   298→                                <div class="p-4 border-b border-slate-50 bg-gradient-to-br from-white to-slate-50 flex justify-between items-start">
+   299→                                    <div class="flex items-center gap-3">
+   300→                                        <div class="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl font-bold border border-indigo-100">
+   301→                                            <?= mb_substr($trainer['name'], 0, 1, 'UTF-8') ?>
+   302→                                        </div>
+   303→                                        <div>
+   304→                                            <h3 class="font-bold text-slate-800"><?= htmlspecialchars($trainer['name']) ?></h3>
+   305→                                            <p class="text-xs text-slate-400 font-mono dir-ltr"><?= htmlspecialchars($trainer['phone']) ?></p>
+   306→                                        </div>
+   307→                                    </div>
+   308→                                    <div class="relative group">
+   309→                                        <button class="text-slate-300 hover:text-indigo-600 transition p-2"><i class="fas fa-ellipsis-v"></i></button>
+   310→                                        <div class="absolute left-0 top-full mt-1 w-32 bg-white rounded-xl shadow-xl border border-slate-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-20 overflow-hidden">
+   311→                                            <a href="#" onclick="openEditTrainer(<?= $trainer['id'] ?>, '<?= htmlspecialchars($trainer['name']) ?>', '<?= htmlspecialchars($trainer['phone']) ?>')" class="block px-4 py-2 text-xs text-slate-600 hover:bg-slate-50 hover:text-indigo-600 transition"><i class="fas fa-edit mr-1"></i> تعديل</a>
+   312→                                            <a href="#" onclick="openDeleteTrainer(<?= $trainer['id'] ?>, '<?= htmlspecialchars($trainer['name']) ?>')" class="block px-4 py-2 text-xs text-rose-500 hover:bg-rose-50 transition"><i class="fas fa-trash mr-1"></i> حذف</a>
+   313→                                        </div>
+   314→                                    </div>
+   315→                                </div>
+   316→
+   317→                                <!-- Trainer Students List -->
+   318→                                <div class="p-2 flex-grow overflow-y-auto custom-scrollbar" style="max-height: 300px;">
+   319→                                    <?php
+   320→                                        $st_stmt = $pdo->prepare("SELECT id, student_name, level FROM users WHERE trainer_id = ? ORDER BY level ASC, student_name ASC");
+   321→                                        $st_stmt->execute([$trainer['id']]);
+   322→                                        $students = $st_stmt->fetchAll();
+   323→                                        $grouped = [];
+   324→                                        foreach($students as $s) $grouped[$s['level'] ?? 'غير محدد'][] = $s;
+   325→                                    ?>
+   326→                                    
+   327→                                    <?php if(empty($students)): ?>
+   328→                                        <div class="text-center py-8 text-slate-300">
+   329→                                            <i class="fas fa-inbox text-2xl mb-2"></i>
+   330→                                            <p class="text-xs">لا يوجد طلاب</p>
+   331→                                        </div>
+   332→                                    <?php else: ?>
+   333→                                        <div class="space-y-1">
+   334→                                            <?php foreach($grouped as $lvl => $grp): ?>
+   335→                                                <div class="bg-slate-50/50 rounded-lg border border-slate-100 overflow-hidden group-accordion">
+   336→                                                    <button onclick="this.nextElementSibling.classList.toggle('hidden')" class="w-full flex items-center justify-between p-2 text-xs font-bold text-slate-600 hover:bg-slate-50 transition">
+   337→                                                        <span>المستوى <?= $lvl ?></span>
+   338→                                                        <span class="bg-white px-2 py-0.5 rounded-full text-[10px] border border-slate-200 shadow-sm"><?= count($grp) ?></span>
+   339→                                                    </button>
+   340→                                                    <div class="hidden bg-white border-t border-slate-100">
+   341→                                                        <?php foreach($grp as $s): ?>
+   342→                                                            <div class="student-item flex items-center justify-between p-2 border-b border-slate-50 last:border-0 hover:bg-indigo-50/30 transition" data-name="<?= htmlspecialchars($s['student_name']) ?>">
+   343→                                                                <div class="flex items-center gap-2">
+   344→                                                                    <span class="text-xs font-medium text-slate-700"><?= htmlspecialchars($s['student_name']) ?></span>
+   345→                                                                    <button onclick="openLevelModal(<?= $s['id'] ?>, '<?= htmlspecialchars($s['student_name']) ?>', <?= $s['level'] ?? 1 ?>)" class="text-[9px] text-indigo-400 hover:text-indigo-600 transition p-1"><i class="fas fa-pencil-alt"></i></button>
+   346→                                                                </div>
+   347→                                                                <form method="POST" onsubmit="return confirmUnassign(event)" class="m-0">
+   348→                                                                    <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+   349→                                                                    <input type="hidden" name="student_id_to_unassign" value="<?= $s['id'] ?>">
+   350→                                                                    <button type="submit" name="unassign_student" class="text-slate-300 hover:text-rose-500 transition px-2"><i class="fas fa-times-circle"></i></button>
+   351→                                                                </form>
+   352→                                                            </div>
+   353→                                                        <?php endforeach; ?>
+   354→                                                    </div>
+   355→                                                </div>
+   356→                                            <?php endforeach; ?>
+   357→                                        </div>
+   358→                                    <?php endif; ?>
+   359→                                </div>
+   360→
+   361→                                <!-- Quick Add Footer -->
+   362→                                <?php if (!empty($unassigned_students)): ?>
+   363→                                <div class="p-3 bg-slate-50 border-t border-slate-100">
+   364→                                    <form method="POST" class="flex gap-2">
+   365→                                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+   366→                                        <input type="hidden" name="trainer_id" value="<?= $trainer['id'] ?>">
+   367→                                        <select name="student_id" class="w-full bg-white border border-slate-200 text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" required>
+   368→                                            <option value="" disabled selected>+ ضم طالب...</option>
+   369→                                            <?php foreach($unassigned_students as $us): ?>
+   370→                                                <option value="<?= $us['id'] ?>"><?= htmlspecialchars($us['student_name']) ?></option>
+   371→                                            <?php endforeach; ?>
+   372→                                        </select>
+   373→                                        <button type="submit" name="assign_student" class="bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg px-3 transition shadow-sm">
+   374→                                            <i class="fas fa-plus text-xs"></i>
+   375→                                        </button>
+   376→                                    </form>
+   377→                                </div>
+   378→                                <?php endif; ?>
+   379→                            </div>
+   380→                        </div>
+   381→                    <?php endforeach; ?>
+   382→                </div>
+   383→            </div>
+   384→        </div>
+   385→    </div>
+   386→
+   387→    <!-- Modals -->
+   388→    
+   389→    <!-- Add Trainer -->
+   390→    <div id="addTrainerModal" class="modal fixed inset-0 bg-black/50 z-[60] hidden opacity-0 flex items-center justify-center backdrop-blur-sm transition-opacity duration-300">
+   391→        <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl transform scale-95 transition-transform duration-300 m-4 p-6">
+   392→            <div class="flex justify-between items-center mb-4">
+   393→                <h3 class="text-lg font-bold text-slate-800">إضافة مدرب جديد</h3>
+   394→                <button onclick="toggleModal('addTrainerModal')" class="text-slate-400 hover:text-rose-500"><i class="fas fa-times"></i></button>
+   395→            </div>
+   396→            <form method="POST">
+   397→                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+   398→                <div class="space-y-4">
+   399→                    <div>
+   400→                        <label class="block text-xs font-bold text-slate-500 mb-1">الاسم</label>
+   401→                        <input type="text" name="trainer_name" class="w-full border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:border-indigo-500 transition" required>
+   402→                    </div>
+   403→                    <div>
+   404→                        <label class="block text-xs font-bold text-slate-500 mb-1">الهاتف</label>
+   405→                        <input type="tel" name="trainer_phone" class="w-full border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:border-indigo-500 transition" pattern="^\d{11}$" required>
+   406→                    </div>
+   407→                    <button type="submit" name="add_trainer" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl transition shadow-lg shadow-indigo-200">حفظ البيانات</button>
+   408→                </div>
+   409→            </form>
+   410→        </div>
+   411→    </div>
+   412→
+   413→    <!-- Edit Trainer -->
+   414→    <div id="editTrainerModal" class="modal fixed inset-0 bg-black/50 z-[60] hidden opacity-0 flex items-center justify-center backdrop-blur-sm">
+   415→        <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl m-4 p-6">
+   416→            <div class="flex justify-between items-center mb-4">
+   417→                <h3 class="text-lg font-bold text-slate-800">تعديل البيانات</h3>
+   418→                <button onclick="toggleModal('editTrainerModal')" class="text-slate-400 hover:text-rose-500"><i class="fas fa-times"></i></button>
+   419→            </div>
+   420→            <form method="POST">
+   421→                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+   422→                <input type="hidden" name="trainer_id" id="edit_id">
+   423→                <div class="space-y-4">
+   424→                    <div>
+   425→                        <label class="block text-xs font-bold text-slate-500 mb-1">الاسم</label>
+   426→                        <input type="text" name="trainer_name" id="edit_name" class="w-full border border-slate-200 rounded-xl px-3 py-2" required>
+   427→                    </div>
+   428→                    <div>
+   429→                        <label class="block text-xs font-bold text-slate-500 mb-1">الهاتف</label>
+   430→                        <input type="tel" name="trainer_phone" id="edit_phone" class="w-full border border-slate-200 rounded-xl px-3 py-2" pattern="^\d{11}$" required>
+   431→                    </div>
+   432→                    <button type="submit" name="edit_trainer" class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2.5 rounded-xl transition shadow-lg shadow-emerald-200">حفظ التعديلات</button>
+   433→                </div>
+   434→            </form>
+   435→        </div>
+   436→    </div>
+   437→
+   438→    <!-- Delete Trainer -->
+   439→    <div id="deleteTrainerModal" class="modal fixed inset-0 bg-black/50 z-[60] hidden opacity-0 flex items-center justify-center backdrop-blur-sm">
+   440→        <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl m-4 p-6 text-center">
+   441→            <div class="w-16 h-16 bg-rose-100 text-rose-500 rounded-full flex items-center justify-center text-2xl mx-auto mb-4"><i class="fas fa-trash-alt"></i></div>
+   442→            <h3 class="text-lg font-bold text-slate-800 mb-2">حذف المدرب؟</h3>
+   443→            <p class="text-sm text-slate-500 mb-6">سيتم فك ارتباط جميع الطلاب المسجلين معه.</p>
+   444→            <form method="POST">
+   445→                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+   446→                <input type="hidden" name="trainer_id_to_delete" id="del_id">
+   447→                <div class="flex gap-3">
+   448→                    <button type="button" onclick="toggleModal('deleteTrainerModal')" class="flex-1 bg-slate-100 text-slate-600 py-2 rounded-xl font-bold hover:bg-slate-200 transition">إلغاء</button>
+   449→                    <button type="submit" name="delete_trainer" class="flex-1 bg-rose-500 text-white py-2 rounded-xl font-bold hover:bg-rose-600 transition">تأكيد الحذف</button>
+   450→                </div>
+   451→            </form>
+   452→        </div>
+   453→    </div>
+   454→
+   455→    <!-- Level Modal -->
+   456→    <div id="levelModal" class="modal fixed inset-0 bg-black/50 z-[60] hidden opacity-0 flex items-center justify-center backdrop-blur-sm">
+   457→        <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl m-4 p-6">
+   458→            <h3 class="text-center font-bold text-slate-800 mb-4">تغيير مستوى <span id="lvl_name" class="text-indigo-600"></span></h3>
+   459→            <form method="POST">
+   460→                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+   461→                <input type="hidden" name="student_id" id="lvl_student_id">
+   462→                <select name="new_level" id="lvl_select" class="w-full border border-slate-200 rounded-xl px-3 py-2 mb-4 text-center font-bold text-slate-700 focus:border-indigo-500" required>
+   463→                    <?php for($i=1; $i<=10; $i++): ?>
+   464→                        <option value="<?= $i ?>">المستوى <?= $i ?></option>
+   465→                    <?php endfor; ?>
+   466→                </select>
+   467→                <div class="flex gap-3">
+   468→                    <button type="button" onclick="toggleModal('levelModal')" class="flex-1 bg-slate-100 text-slate-600 py-2 rounded-xl font-bold">إلغاء</button>
+   469→                    <button type="submit" name="update_student_level" class="flex-1 bg-indigo-600 text-white py-2 rounded-xl font-bold">حفظ</button>
+   470→                </div>
+   471→            </form>
+   472→        </div>
+   473→    </div>
+   474→
+   475→    <script>
+   476→        // Toggle Modals
+   477→        function toggleModal(modalId) {
+   478→            const modal = document.getElementById(modalId);
+   479→            const body = document.body;
+   480→            
+   481→            if (modal.classList.contains('hidden')) {
+   482→                modal.classList.remove('hidden');
+   483→                setTimeout(() => {
+   484→                    modal.classList.remove('opacity-0');
+   485→                    modal.firstElementChild.classList.remove('scale-95');
+   486→                }, 10);
+   487→                body.classList.add('modal-active');
+   488→            } else {
+   489→                modal.classList.add('opacity-0');
+   490→                modal.firstElementChild.classList.add('scale-95');
+   491→                setTimeout(() => {
+   492→                    modal.classList.add('hidden');
+   493→                }, 300);
+   494→                body.classList.remove('modal-active');
+   495→            }
+   496→        }
+   497→
+   498→        function openEditTrainer(id, name, phone) {
+   499→            document.getElementById('edit_id').value = id;
+   500→            document.getElementById('edit_name').value = name;
+   501→            document.getElementById('edit_phone').value = phone;
+   502→            toggleModal('editTrainerModal');
+   503→        }
+   504→
+   505→        function openDeleteTrainer(id, name) {
+   506→            document.getElementById('del_id').value = id;
+   507→            toggleModal('deleteTrainerModal');
+   508→        }
+   509→
+   510→        function openLevelModal(id, name, lvl) {
+   511→            document.getElementById('lvl_student_id').value = id;
+   512→            document.getElementById('lvl_name').textContent = name;
+   513→            document.getElementById('lvl_select').value = lvl;
+   514→            toggleModal('levelModal');
+   515→        }
+   516→
+   517→        function confirmUnassign(event) {
+   518→            event.preventDefault();
+   519→            Swal.fire({
+   520→                title: 'إزالة الطالب؟',
+   521→                text: "سيصبح الطالب بلا مدرب.",
+   522→                icon: 'warning',
+   523→                showCancelButton: true,
+   524→                confirmButtonColor: '#f59e0b',
+   525→                cancelButtonColor: '#d33',
+   526→                confirmButtonText: 'نعم، إزالة',
+   527→                cancelButtonText: 'إلغاء'
+   528→            }).then((result) => {
+   529→                if (result.isConfirmed) event.target.submit();
+   530→            });
+   531→        }
+   532→
+   533→        // Search Logic
+   534→        document.getElementById('globalSearch').addEventListener('keyup', function() {
+   535→            const filter = this.value.toLowerCase();
+   536→            
+   537→            // Trainers
+   538→            document.querySelectorAll('.trainer-wrapper').forEach(card => {
+   539→                const name = card.dataset.name.toLowerCase();
+   540→                let foundStudent = false;
+   541→                card.querySelectorAll('.student-item').forEach(st => {
+   542→                    if (st.dataset.name.toLowerCase().includes(filter)) {
+   543→                        foundStudent = true;
+   544→                        st.parentElement.classList.remove('hidden'); // Unhide list if needed
+   545→                        st.style.display = 'flex';
+   546→                    } else {
+   547→                        if (filter !== '') st.style.display = 'none';
+   548→                        else st.style.display = 'flex';
+   549→                    }
+   550→                });
+   551→                
+   552→                if (name.includes(filter) || foundStudent) card.style.display = '';
+   553→                else card.style.display = 'none';
+   554→            });
+   555→
+   556→            // Unassigned Students
+   557→            document.querySelectorAll('.student-item-free').forEach(item => {
+   558→                if (item.dataset.name.toLowerCase().includes(filter)) item.style.display = 'flex';
+   559→                else item.style.display = 'none';
+   560→            });
+   561→        });
+   562→
+   563→        // Bulk Selection
+   564→        const selectAll = document.getElementById('selectAllUnassigned');
+   565→        const checkboxes = document.querySelectorAll('.student-checkbox');
+   566→        const actionBar = document.getElementById('bulkActionBar');
+   567→        const countSpan = document.getElementById('selectedCount');
+   568→
+   569→        function updateAction() {
+   570→            const count = document.querySelectorAll('.student-checkbox:checked').length;
+   571→            countSpan.textContent = count;
+   572→            if (count > 0) actionBar.classList.remove('translate-y-full');
+   573→            else actionBar.classList.add('translate-y-full');
+   574→        }
+   575→
+   576→        checkboxes.forEach(cb => cb.addEventListener('change', updateAction));
+   577→
+   578→        if (selectAll) {
+   579→            selectAll.addEventListener('change', function() {
+   580→                checkboxes.forEach(cb => cb.checked = this.checked);
+   581→                updateAction();
+   582→            });
+   583→        }
+   584→
+   585→        // Show Flash Messages with SweetAlert
+   586→        <?php if ($flash_success): ?>
+   587→        Swal.fire({ icon: 'success', title: 'تم بنجاح!', text: '<?= $flash_success ?>', timer: 2000, showConfirmButton: false });
+   588→        <?php endif; ?>
+   589→        <?php if ($flash_error): ?>
+   590→        Swal.fire({ icon: 'error', title: 'خطأ!', text: '<?= $flash_error ?>' });
+   591→        <?php endif; ?>
+   592→    </script>
+   593→</body>
+   594→</html>

@@ -1,0 +1,354 @@
+// ====================================================================
+// e-learn Mental Math Platform — Prisma Schema (2027 edition)
+// Targets Supabase Postgres in production (Vercel). The schema uses
+// no SQLite-specific features so the only thing that changes between
+// environments is DATABASE_URL.
+// ====================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// --------------------------------------------------------------------
+// Auth & Users
+// --------------------------------------------------------------------
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  emailVerified DateTime?
+  username      String   @unique
+  studentName   String
+  phone         String?
+  role          String   @default("student") // "student" | "admin"
+  passwordHash  String
+  trainerId     String?
+  level         Int      @default(1) // 1..10
+  status        String   @default("pending") // "pending" | "approved" | "expired"
+  validityEnd   DateTime?
+  totalPoints   Int      @default(0)
+  pvpPoints     Int      @default(0)
+  currentStatus String   @default("idle") // "idle" | "playing"
+  lastActivity  DateTime @default(now())
+  aiAttemptsCount Int    @default(0)
+  aiLastDate    DateTime?
+  lastDailyBonus DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  trainer       Trainer?     @relation(fields: [trainerId], references: [id], onDelete: SetNull)
+  accounts      Account[]
+  sessions      Session[]
+  trainings     Training[]
+  exams         GeneratedExam[]
+  friendshipsSent     Friendship[]  @relation("sender")
+  friendshipsReceived  Friendship[]  @relation("receiver")
+  pvpMatchesAsP1       PvpMatch[]    @relation("player1")
+  pvpMatchesAsP2       PvpMatch[]    @relation("player2")
+  pvpWins              PvpMatch[]    @relation("winner")
+  withdrawalRequests   WithdrawalRequest[]
+  notifications        Notification[] // when targeted
+  notificationReads    NotificationRead[]
+  fcmTokens            FcmToken[]
+  otps                 Otp[]
+  auditLogs           AuditLog[]      @relation("actor")
+  auditLogTargets     AuditLog[]      @relation("target")
+  withdrawalsDecided   WithdrawalRequest[] @relation("decidedByUser")
+  activityLogs         ActivityLog[]
+
+  @@index([trainerId])
+  @@index([status])
+  @@index([role])
+}
+
+// --------------------------------------------------------------------
+// Trainers — contact entities (no login in legacy; can be promoted later)
+// --------------------------------------------------------------------
+
+model Trainer {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String   @unique
+  email     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users User[]
+
+  @@index([name])
+}
+
+// --------------------------------------------------------------------
+// Trainings — every game session (incl. abacus + AI matches + legacy exam generator)
+// --------------------------------------------------------------------
+
+model Training {
+  id              String   @id @default(cuid())
+  userId          String
+  gameType        String   // "addition_subtraction" | "multiplication" | "division" | "abacus" | "ai_match" | "math_exam_generator"
+  settingsJson    String   // JSON string
+  resultsJson     String   // JSON string of [{question, userAnswer, correctAnswer, isCorrect, timeTaken}]
+  totalScore      Int      @default(0)
+  averageScore    Float    @default(0)
+  performanceNotes String?
+  seed            String?  // deterministic RNG seed for audit/replay
+  createdAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([gameType])
+}
+
+// --------------------------------------------------------------------
+// Generated exams (5-step wizard)
+// --------------------------------------------------------------------
+
+model GeneratedExam {
+  id             String   @id @default(cuid())
+  userId         String
+  examTitle      String
+  questionsCount Int
+  operationTypes String   // comma-joined: "add_sub,multiply,divide,imagination"
+  settingsJson   String   // full settings object
+  createdAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+// --------------------------------------------------------------------
+// PVP matches & friendships
+// --------------------------------------------------------------------
+
+model PvpMatch {
+  id            String   @id @default(cuid())
+  player1Id     String
+  player2Id     String?
+  betAmount     Int      @default(0)
+  questionCount Int
+  questionsJson String   // JSON of {0:{q,a}, 1:{q,a}, ..., config:{tier,duration,win_points,loss_points}}
+  p1Score       Int      @default(0)
+  p2Score       Int      @default(0)
+  p1Progress    Int      @default(0)
+  p2Progress    Int      @default(0)
+  p1Status      String   @default("playing") // "playing" | "finished" | "surrendered"
+  p2Status      String   @default("waiting") // "waiting" | "playing" | "finished" | "surrendered"
+  status        String   @default("pending") // "pending" | "active" | "completed" | "rejected" | "cancelled"
+  winnerId      String?
+  tier          Int      @default(1) // 1=bronze, 2=silver, 3=gold
+  isAiMatch     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  player1 User  @relation("player1", fields: [player1Id], references: [id], onDelete: Cascade)
+  player2 User? @relation("player2", fields: [player2Id], references: [id], onDelete: SetNull)
+  winner   User? @relation("winner", fields: [winnerId], references: [id], onDelete: SetNull)
+
+  @@index([player1Id])
+  @@index([player2Id])
+  @@index([status])
+}
+
+model Friendship {
+  id         String   @id @default(cuid())
+  senderId   String
+  receiverId String
+  status     String   @default("pending") // "pending" | "accepted" | "rejected"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  sender   User @relation("sender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User @relation("receiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, receiverId])
+  @@index([receiverId, status])
+  @@index([senderId, status])
+}
+
+// --------------------------------------------------------------------
+// Wallet / withdrawals
+// --------------------------------------------------------------------
+
+model WithdrawalRequest {
+  id             String   @id @default(cuid())
+  userId         String
+  pointsAmount   Int
+  moneyAmount    Float
+  paymentMethod  String   // "vodafone_cash" | "orange_cash" | "instapay" | "etisalat_cash"
+  accountDetails String   // encrypt in app layer
+  status         String   @default("pending") // "pending" | "approved" | "rejected"
+  decidedBy      String?
+  decidedAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  decidedByUser User? @relation("decidedByUser", fields: [decidedBy], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([status])
+}
+
+// --------------------------------------------------------------------
+// Notifications
+// --------------------------------------------------------------------
+
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String?  // null = broadcast
+  title       String
+  message     String   // sanitized HTML or markdown
+  isBroadcast Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  user         User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notificationReads NotificationRead[]
+
+  @@index([isBroadcast, createdAt])
+  @@index([userId, createdAt])
+}
+
+model NotificationRead {
+  id             String   @id @default(cuid())
+  notificationId String
+  userId         String
+  createdAt      DateTime @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId])
+}
+
+model FcmToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// --------------------------------------------------------------------
+// OTP store (replaces PHP $_SESSION-based OTP)
+// --------------------------------------------------------------------
+
+model Otp {
+  id        String   @id @default(cuid())
+  userId    String?
+  email     String   // canonical lowercased
+  codeHash  String   // never store plaintext
+  purpose   String   // "register" | "login_force" | "withdrawal" | "password_reset"
+  consumedAt DateTime?
+  expiresAt DateTime
+  attempts  Int      @default(0) // count of failed verifications
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email, purpose])
+  @@index([expiresAt])
+}
+
+// --------------------------------------------------------------------
+// Key-value system settings (tiers config, AI limits, money rates, etc.)
+// --------------------------------------------------------------------
+
+model SystemSetting {
+  key        String   @id // e.g. "tier1_q", "ai_daily_limit", "money_exchange_rate"
+  value      String
+  updatedAt  DateTime @updatedAt
+}
+
+// --------------------------------------------------------------------
+// Activity log (login/logout + admin actions)
+// --------------------------------------------------------------------
+
+model ActivityLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  activityType String   // "login" | "logout" | "register" | "admin_action"
+  metaJson     String?  // JSON string
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  user         User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([activityType])
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  actorId       String   // admin who performed the action
+  targetUserId  String?  // user acted upon
+  action        String   // "update_user" | "delete_user" | "approve_withdrawal" | ...
+  metaJson     String?  // JSON: before/after diff
+  createdAt     DateTime @default(now())
+
+  actor  User   @relation("actor", fields: [actorId], references: [id], onDelete: Cascade)
+  target User?  @relation("target", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([targetUserId])
+}
+
+// --------------------------------------------------------------------
+// Verification token (NextAuth-style email verification)
+// --------------------------------------------------------------------
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}

@@ -1,0 +1,583 @@
+     1→<?php
+     2→// We will use your existing config.php file which handles database connection and sessions.
+     3→include 'config.php';
+     4→
+     5→// بدء الجلسة (لو مش مبدوءة)
+     6→if (session_status() !== PHP_SESSION_ACTIVE) {
+     7→    session_start();
+     8→}
+     9→
+    10→// Redirect if not a logged-in user or if it's an admin.
+    11→if (!isset($_SESSION['user_id']) || ($_SESSION['is_admin'] ?? false)) {
+    12→    header('Location: index.php');
+    13→    exit;
+    14→}
+    15→
+    16→// Fetch user data
+    17→$stmt = $pdo->prepare("SELECT u.*, t.name as trainer_name FROM users u LEFT JOIN trainers t ON u.trainer_id = t.id WHERE u.id = ?");
+    18→$stmt->execute([$_SESSION['user_id']]);
+    19→$user = $stmt->fetch();
+    20→if (!$user) { header('Location: login.php'); exit; }
+    21→
+    22→// Get the first character of the student's name for the avatar
+    23→if (function_exists('mb_strtoupper')) {
+    24→    $student_initial = mb_strtoupper(mb_substr($user['student_name'], 0, 1, 'UTF-8'));
+    25→} else {
+    26→    $student_initial = strtoupper(substr($user['student_name'], 0, 1));
+    27→}
+    28→
+    29→// Determine status and validity text
+    30→$status_text = $user['status'] == 'approved' ? 'نشط' : ($user['status'] == 'pending' ? 'قيد الانتظار' : 'منتهي');
+    31→$status_class = $user['status'] == 'approved' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10';
+    32→
+    33→// Safely determine validity and check for expiry warning
+    34→$validity_remaining = 'منتهية';
+    35→$show_expiry_warning = false;
+    36→if (!empty($user['validity_end'])) {
+    37→    try {
+    38→        $expiry_time = new DateTime($user['validity_end']);
+    39→        $now = new DateTime();
+    40→
+    41→        if ($expiry_time > $now) {
+    42→            $validity_remaining = $expiry_time->format('Y-m-d');
+    43→            $interval = $now->diff($expiry_time);
+    44→            $hours_remaining = ($interval->days * 24) + $interval->h;
+    45→            
+    46→            if ($hours_remaining <= 24 && !isset($_SESSION['expiry_warning_shown'])) {
+    47→                $show_expiry_warning = true;
+    48→                $_SESSION['expiry_warning_shown'] = true;
+    49→            }
+    50→        }
+    51→    } catch (Exception $e) {
+    52→        $validity_remaining = '-';
+    53→    }
+    54→}
+    55→
+    56→// Safely count unread notifications
+    57→$unread_count = 0;
+    58→try {
+    59→    $countStmt = $pdo->prepare("
+    60→        SELECT COUNT(*) FROM notifications n
+    61→        LEFT JOIN notification_reads r ON n.id = r.notification_id AND r.user_id = ?
+    62→        WHERE (n.is_broadcast = 1 OR n.user_id = ?) AND r.id IS NULL
+    63→    ");
+    64→    $countStmt->execute([$user['id'], $user['id']]);
+    65→    $unread_count = (int)$countStmt->fetchColumn();
+    66→} catch (Exception $e) {
+    67→    $unread_count = 0;
+    68→}
+    69→?>
+    70→<!DOCTYPE html>
+    71→<html lang="ar" dir="rtl">
+    72→<head>
+    73→    <meta charset="UTF-8">
+    74→    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    75→    <title>لوحة التحكم - <?= htmlspecialchars($user['student_name']) ?></title>
+    76→    
+    77→    <!-- SEO Tags -->
+    78→    <meta name="description" content="لوحة تحكم الطالب في منصة e-learn. تابع تدريباتك، مسابقاتك، وتطور مستواك في الحساب الذهني.">
+    79→    <meta name="keywords" content="منصة تعليمية, حساب ذهني, يوسي ماس, رياضيات, تدريب عقلي, ذكاء, أطفال, تنمية مهارات, سرعة بديهة, تركيز, ذاكرة, تعليم إلكتروني, تعليم عن بعد, فصول افتراضية, مسابقات, تحديات, أوائل, عباقرة, صحة عقلية, صحة نفسية, رياضة ذهنية, تفكير منطقي, حل مشكلات, إبداع, تحفيز, جوائز, متابعة طلاب, تقييم مستوى, سوروبان, عداد صيني, تخيل, مهارات حياتية, تفوق دراسي, تعليم منزلي, مستقبل, تكنولوجيا التعليم, تطوير ذات, مدربين محترفين, مناهج متطورة, تعلم باللعب, ذكاء اصطناعي, روبوت, e-learn, تربية ذكية, مهارات حسابية, جمع وطرح, ضرب وقسمة, تأسيس رياضي, ومضة حسابية, خيال علمي">
+    80→    <meta name="author" content="e-learn Team">
+    81→    
+    82→    <script src="https://cdn.tailwindcss.com"></script>
+    83→    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    84→    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Chakra+Petch:wght@400;700&display=swap" rel="stylesheet">
+    85→    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    86→    
+    87→    <style>
+    88→        /* --- متغيرات الألوان (نفس المستخدمة في الصفحات السابقة) --- */
+    89→        :root {
+    90→            --bg-primary: #0f172a;
+    91→            --bg-gradient-from: #1e293b;
+    92→            --bg-gradient-to: #0f172a;
+    93→            --text-primary: #ffffff;
+    94→            --text-secondary: #94a3b8;
+    95→            --glass-bg: rgba(30, 41, 59, 0.7);
+    96→            --glass-border: rgba(255, 255, 255, 0.1);
+    97→            --glass-shadow: rgba(0, 0, 0, 0.5);
+    98→            --card-hover: rgba(255, 255, 255, 0.05);
+    99→            --input-bg: rgba(15, 23, 42, 0.6);
+   100→            --symbol-opacity: 0.07;
+   101→            --symbol-color: 255, 255, 255;
+   102→            --sidebar-bg: rgba(15, 23, 42, 0.85); /* خلفية القائمة أغمق قليلاً */
+   103→        }
+   104→
+   105→        body.light-mode {
+   106→            --bg-primary: #e2e8f0;
+   107→            --bg-gradient-from: #cbd5e1;
+   108→            --bg-gradient-to: #f1f5f9;
+   109→            --text-primary: #1e293b;
+   110→            --text-secondary: #475569;
+   111→            --glass-bg: rgba(255, 255, 255, 0.75);
+   112→            --glass-border: rgba(255, 255, 255, 0.6);
+   113→            --glass-shadow: rgba(148, 163, 184, 0.15);
+   114→            --card-hover: rgba(255, 255, 255, 0.9);
+   115→            --input-bg: rgba(255, 255, 255, 0.8);
+   116→            --symbol-opacity: 0.15;
+   117→            --symbol-color: 51, 65, 85;
+   118→            --sidebar-bg: rgba(255, 255, 255, 0.85);
+   119→        }
+   120→        
+   121→        body { 
+   122→            font-family: 'Cairo', sans-serif; 
+   123→            background-color: var(--bg-primary); 
+   124→            color: var(--text-primary); 
+   125→            min-height: 100vh; 
+   126→            transition: background-color 0.5s ease, color 0.5s ease;
+   127→            overflow-x: hidden;
+   128→        }
+   129→        
+   130→        /* الخلفية المتحركة */
+   131→        .arena-bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; background: radial-gradient(ellipse at bottom, var(--bg-gradient-from) 0%, var(--bg-gradient-to) 100%); overflow: hidden; pointer-events: none; transition: background 0.5s ease; }
+   132→        
+   133→        .bg-symbol { 
+   134→            position: absolute; 
+   135→            font-family: 'Chakra Petch', sans-serif; 
+   136→            font-weight: 900; 
+   137→            pointer-events: none; 
+   138→            z-index: -1; 
+   139→            user-select: none; 
+   140→            opacity: var(--symbol-opacity); 
+   141→            will-change: opacity, transform; 
+   142→            animation-name: paleBreathing; 
+   143→            animation-iteration-count: infinite; 
+   144→            animation-direction: alternate; 
+   145→            animation-timing-function: ease-in-out; 
+   146→            animation-fill-mode: both; 
+   147→            color: rgba(var(--symbol-color), 1); 
+   148→        }
+   149→        @keyframes paleBreathing { 
+   150→            0% { opacity: var(--symbol-opacity); transform: scale(1); } 
+   151→            100% { opacity: calc(var(--symbol-opacity) + 0.08); transform: scale(1.05); } 
+   152→        }
+   153→
+   154→        /* العناصر الزجاجية */
+   155→        .glass-panel {
+   156→            background: var(--glass-bg);
+   157→            backdrop-filter: blur(12px);
+   158→            -webkit-backdrop-filter: blur(12px);
+   159→            border: 1px solid var(--glass-border);
+   160→            box-shadow: 0 4px 6px -1px var(--glass-shadow);
+   161→            transition: all 0.3s ease;
+   162→        }
+   163→
+   164→        /* Sidebar Specific Styles */
+   165→        .sidebar-glass {
+   166→            background: var(--sidebar-bg);
+   167→            backdrop-filter: blur(16px);
+   168→            border-right: 1px solid var(--glass-border);
+   169→        }
+   170→        
+   171→        .menu-item {
+   172→            display: flex;
+   173→            align-items: center;
+   174→            justify-content: space-between;
+   175→            padding: 12px 16px;
+   176→            border-radius: 12px;
+   177→            background: transparent;
+   178→            border: 1px solid transparent;
+   179→            transition: all 0.2s ease;
+   180→            color: var(--text-secondary);
+   181→            font-size: 0.85rem;
+   182→            font-weight: 600;
+   183→        }
+   184→        .menu-item:hover {
+   185→            background: var(--card-hover);
+   186→            border-color: var(--glass-border);
+   187→            color: var(--text-primary);
+   188→            transform: translateX(-4px);
+   189→        }
+   190→        .menu-item i { width: 24px; text-align: center; font-size: 1.1rem; }
+   191→        
+   192→        .info-badge {
+   193→            font-family: 'Chakra Petch', monospace;
+   194→            padding: 2px 8px;
+   195→            border-radius: 6px;
+   196→            font-size: 0.75rem;
+   197→            font-weight: bold;
+   198→        }
+   199→
+   200→        /* --- Glow Styles for Specific Cards --- */
+   201→        .shadow-glow-orange {
+   202→            box-shadow: 0 0 20px rgba(249, 115, 22, 0.25); /* Orange Glow */
+   203→            border: 1px solid rgba(249, 115, 22, 0.3);
+   204→        }
+   205→        .shadow-glow-orange:hover {
+   206→            box-shadow: 0 0 40px rgba(249, 115, 22, 0.5);
+   207→            border-color: rgba(249, 115, 22, 0.6);
+   208→            transform: translateY(-5px);
+   209→        }
+   210→
+   211→        .shadow-glow-purple {
+   212→            box-shadow: 0 0 20px rgba(168, 85, 247, 0.25); /* Purple Glow */
+   213→            border: 1px solid rgba(168, 85, 247, 0.3);
+   214→        }
+   215→        .shadow-glow-purple:hover {
+   216→            box-shadow: 0 0 40px rgba(168, 85, 247, 0.5);
+   217→            border-color: rgba(168, 85, 247, 0.6);
+   218→            transform: translateY(-5px);
+   219→        }
+   220→        
+   221→        /* Sidebar Transition */
+   222→        #sidebar { transition: transform 0.3s ease-in-out; }
+   223→        
+   224→        /* Scrollbar hide */
+   225→        .no-scrollbar::-webkit-scrollbar { display: none; }
+   226→        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+   227→        
+   228→        /* نصوص */
+   229→        h1, h2, h3, h4, .user-name { color: var(--text-primary); }
+   230→        p, span, i { color: var(--text-secondary); }
+   231→        .text-white-always { color: #fff !important; }
+   232→        .text-white-always i { color: rgba(255,255,255,0.8) !important; }
+   233→    </style>
+   234→</head>
+   235→<body class="pb-24 relative">
+   236→
+   237→    <!-- الخلفية -->
+   238→    <div id="arenaBg" class="arena-bg"></div>
+   239→
+   240→    <!-- Header -->
+   241→    <nav class="glass-panel sticky top-0 z-40 border-b-0 border-b-white/10">
+   242→        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+   243→            
+   244→            <!-- User Avatar (Menu Trigger) -->
+   245→            <div class="flex items-center gap-3 cursor-pointer group" onclick="toggleSidebar()">
+   246→                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center font-bold text-lg text-white shadow-md border border-white/20">
+   247→                    <?= $student_initial ?>
+   248→                </div>
+   249→                <div>
+   250→                    <h1 class="font-bold text-sm leading-tight user-name"><?= htmlspecialchars($user['student_name']) ?></h1>
+   251→                    <span class="text-[10px] font-semibold" style="color: var(--text-secondary);">المستوى <?= $user['level'] ?? 1 ?></span>
+   252→                </div>
+   253→            </div>
+   254→
+   255→            <!-- Actions -->
+   256→            <div class="flex items-center gap-3">
+   257→                <!-- زر تبديل الوضع -->
+   258→                <button onclick="toggleTheme()" class="w-8 h-8 rounded-full flex items-center justify-center transition hover:bg-white/10" title="تغيير المظهر">
+   259→                    <span id="themeIcon" class="text-lg">🌙</span>
+   260→                </button>
+   261→
+   262→                <!-- Messages -->
+   263→                <a href="notifications/user_notifications.php" class="relative p-2 rounded-xl hover:bg-white/10 transition">
+   264→                    <i class="fas fa-bell text-xl"></i>
+   265→                    <?php if ($unread_count > 0): ?>
+   266→                        <span class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-slate-900 animate-pulse"></span>
+   267→                    <?php endif; ?>
+   268→                </a>
+   269→                
+   270→                <!-- Sidebar Toggle -->
+   271→                <button onclick="toggleSidebar()" class="hover:bg-white/10 p-2 rounded-xl transition">
+   272→                    <i class="fas fa-bars text-xl"></i>
+   273→                </button>
+   274→            </div>
+   275→        </div>
+   276→    </nav>
+   277→
+   278→    <!-- Sidebar Overlay -->
+   279→    <div id="sidebarOverlay" onclick="toggleSidebar()" class="fixed inset-0 bg-black/50 z-[60] hidden backdrop-blur-sm transition-opacity opacity-0"></div>
+   280→
+   281→    <!-- Sidebar (يفتح من اليسار) -->
+   282→    <aside id="sidebar" class="fixed top-0 left-0 h-full w-80 sidebar-glass z-[70] transform -translate-x-full overflow-y-auto shadow-2xl transition-transform duration-300 border-r border-white/10">
+   283→        <div class="p-6 border-b border-white/10 bg-gradient-to-b from-indigo-500/10 to-transparent">
+   284→            <div class="flex justify-between items-start mb-4">
+   285→                <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-600 to-purple-700 text-white flex items-center justify-center text-3xl font-bold shadow-lg border-2 border-white/10">
+   286→                    <?= $student_initial ?>
+   287→                </div>
+   288→                <button onclick="toggleSidebar()" class="w-8 h-8 rounded-full border border-white/10 hover:bg-rose-500/20 hover:text-rose-500 flex items-center justify-center transition">
+   289→                    <i class="fas fa-times"></i>
+   290→                </button>
+   291→            </div>
+   292→            <h2 class="font-bold text-xl user-name"><?= htmlspecialchars($user['student_name']) ?></h2>
+   293→            <p class="text-xs font-mono mt-1 text-indigo-400">@<?= htmlspecialchars($user['username']) ?></p>
+   294→            
+   295→            <div class="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[10px] font-bold <?= $status_class ?>">
+   296→                <span class="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></span>
+   297→                <?= $status_text ?>
+   298→            </div>
+   299→        </div>
+   300→        
+   301→        <div class="p-4 space-y-2">
+   302→            <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider px-2 mb-2 mt-2">بياناتي الدراسية</h3>
+   303→            
+   304→            <div class="menu-item cursor-default">
+   305→                <div class="flex items-center gap-3">
+   306→                    <i class="fas fa-chalkboard-teacher text-indigo-500"></i>
+   307→                    <span>المدرب المسؤول</span>
+   308→                </div>
+   309→                <span class="font-bold text-xs user-name"><?= htmlspecialchars($user['trainer_name'] ?? 'غير محدد') ?></span>
+   310→            </div>
+   311→
+   312→            <div class="menu-item cursor-default">
+   313→                <div class="flex items-center gap-3">
+   314→                    <i class="fas fa-layer-group text-purple-500"></i>
+   315→                    <span>المستوى الدراسي</span>
+   316→                </div>
+   317→                <span class="info-badge bg-purple-500/10 text-purple-500">Level <?= $user['level'] ?? 1 ?></span>
+   318→            </div>
+   319→
+   320→            <div class="menu-item cursor-default">
+   321→                <div class="flex items-center gap-3">
+   322→                    <i class="fas fa-calendar-check text-emerald-500"></i>
+   323→                    <span>نهاية الاشتراك</span>
+   324→                </div>
+   325→                <span class="info-badge bg-emerald-500/10 text-emerald-500"><?= $validity_remaining ?></span>
+   326→            </div>
+   327→
+   328→            <div class="menu-item cursor-default border-b border-white/5 pb-4 mb-2">
+   329→                <div class="flex items-center gap-3">
+   330→                    <i class="fas fa-mobile-alt text-blue-500"></i>
+   331→                    <span>رقم الهاتف</span>
+   332→                </div>
+   333→                <span class="font-mono text-xs text-slate-400"><?= htmlspecialchars($user['phone'] ?? '-') ?></span>
+   334→            </div>
+   335→
+   336→            <a href="logout.php" class="menu-item hover:bg-rose-500/10 hover:border-rose-500/20 hover:text-rose-500 group mt-4">
+   337→                <div class="flex items-center gap-3">
+   338→                    <i class="fas fa-sign-out-alt text-slate-400 group-hover:text-rose-500 transition-colors"></i>
+   339→                    <span>تسجيل الخروج</span>
+   340→                </div>
+   341→                <i class="fas fa-chevron-left text-xs opacity-50"></i>
+   342→            </a>
+   343→        </div>
+   344→    </aside>
+   345→
+   346→    <!-- Main Content -->
+   347→    <main class="container mx-auto px-4 py-8 space-y-8">
+   348→        
+   349→        <!-- Welcome Section -->
+   350→        <div class="relative overflow-hidden bg-gradient-to-r from-indigo-600 to-violet-600 rounded-3xl p-6 sm:p-10 text-white shadow-2xl shadow-indigo-500/20 border border-white/10">
+   351→            <div class="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
+   352→            <div class="absolute bottom-0 left-0 w-40 h-40 bg-black/10 rounded-full blur-2xl -ml-10 -mb-10 pointer-events-none"></div>
+   353→            
+   354→            <div class="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+   355→                <div class="text-white-always">
+   356→                    <h2 class="text-2xl sm:text-3xl font-black mb-2" style="color: white !important;">أهلاً يا بطل! 👋</h2>
+   357→                    <p class="text-indigo-100 font-medium max-w-lg text-sm sm:text-base leading-relaxed" style="color: rgba(255,255,255,0.9) !important;">
+   358→                        جاهز تكسر أرقامك القياسية النهاردة؟ ابدأ بالتدريبات وسخن عقلك قبل التحديات!
+   359→                    </p>
+   360→                </div>
+   361→                <div class="flex gap-3">
+   362→                    <a href="pvp/challenges.php" class="glass-panel bg-white/20 hover:bg-white/30 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg transition transform flex items-center gap-2 border-white/20">
+   363→                        <span style="color: white !important;">الساحة</span> <i class="fas fa-arrow-left" style="color: white !important;"></i>
+   364→                    </a>
+   365→                </div>
+   366→            </div>
+   367→        </div>
+   368→
+   369→        <!-- Section 1: Training Zone -->
+   370→        <div>
+   371→            <h3 class="text-lg font-bold mb-4 flex items-center gap-2 user-name">
+   372→                <span class="bg-blue-500/20 text-blue-400 p-1.5 rounded-lg text-sm"><i class="fas fa-dumbbell" style="color: #60a5fa !important;"></i></span>
+   373→                منطقة التدريب
+   374→            </h3>
+   375→            
+   376→            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+   377→                
+   378→                <!-- الجمع والطرح -->
+   379→                <a href="trainings/addition_subtraction_setup.php" class="group relative overflow-hidden rounded-2xl glass-panel p-4 hover:border-blue-500/50 transition-all hover:-translate-y-1 h-32 flex flex-col justify-between">
+   380→                    <div class="absolute right-2 top-2 w-8 h-8 bg-blue-500/10 text-blue-500 rounded-lg flex items-center justify-center text-sm font-bold group-hover:bg-blue-500 group-hover:text-white transition-colors">
+   381→                        <i class="fas fa-plus-minus" style="color: inherit !important;"></i>
+   382→                    </div>
+   383→                    <div class="mt-auto">
+   384→                        <h4 class="font-bold user-name text-sm">الجمع والطرح</h4>
+   385→                        <p class="text-[10px] opacity-70">أساسيات الحساب</p>
+   386→                    </div>
+   387→                </a>
+   388→
+   389→                <!-- الضرب -->
+   390→                <a href="trainings/multiplication_setup.php" class="group relative overflow-hidden rounded-2xl glass-panel p-4 hover:border-emerald-500/50 transition-all hover:-translate-y-1 h-32 flex flex-col justify-between">
+   391→                    <div class="absolute right-2 top-2 w-8 h-8 bg-emerald-500/10 text-emerald-500 rounded-lg flex items-center justify-center text-sm font-bold group-hover:bg-emerald-500 group-hover:text-white transition-colors">
+   392→                        <i class="fas fa-times" style="color: inherit !important;"></i>
+   393→                    </div>
+   394→                    <div class="mt-auto">
+   395→                        <h4 class="font-bold user-name text-sm">لعبة الضرب</h4>
+   396→                        <p class="text-[10px] opacity-70">جدول الضرب</p>
+   397→                    </div>
+   398→                </a>
+   399→
+   400→                <!-- القسمة (جديد) -->
+   401→                <a href="trainings/division_setup.php" class="group relative overflow-hidden rounded-2xl glass-panel p-4 hover:border-cyan-500/50 transition-all hover:-translate-y-1 h-32 flex flex-col justify-between">
+   402→                    <div class="absolute right-2 top-2 w-8 h-8 bg-cyan-500/10 text-cyan-500 rounded-lg flex items-center justify-center text-sm font-bold group-hover:bg-cyan-500 group-hover:text-white transition-colors">
+   403→                        <i class="fas fa-divide" style="color: inherit !important;"></i>
+   404→                    </div>
+   405→                    <div class="mt-auto">
+   406→                        <h4 class="font-bold user-name text-sm">القسمة</h4>
+   407→                        <p class="text-[10px] opacity-70">تحدي القسمة</p>
+   408→                    </div>
+   409→                </a>
+   410→
+   411→                <!-- الأباكس -->
+   412→                <a href="trainings/abacus_setup.php" class="group relative overflow-hidden rounded-2xl glass-panel p-4 hover:border-teal-500/50 transition-all hover:-translate-y-1 h-32 flex flex-col justify-between">
+   413→                    <div class="absolute right-2 top-2 w-8 h-8 bg-teal-500/10 text-teal-500 rounded-lg flex items-center justify-center text-sm font-bold group-hover:bg-teal-500 group-hover:text-white transition-colors">
+   414→                        <i class="fas fa-calculator" style="color: inherit !important;"></i>
+   415→                    </div>
+   416→                    <div class="mt-auto">
+   417→                        <h4 class="font-bold user-name text-sm">عداد الأباكس</h4>
+   418→                        <p class="text-[10px] opacity-70">تخيل وتمثيل</p>
+   419→                    </div>
+   420→                </a>
+   421→
+   422→                <!-- الإحصائيات -->
+   423→                <a href="trainings/statistics.php" class="group relative overflow-hidden rounded-2xl glass-panel p-4 hover:border-orange-500/50 transition-all hover:-translate-y-1 h-32 flex flex-col justify-between">
+   424→                    <div class="absolute right-2 top-2 w-8 h-8 bg-orange-500/10 text-orange-500 rounded-lg flex items-center justify-center text-sm font-bold group-hover:bg-orange-500 group-hover:text-white transition-colors">
+   425→                        <i class="fas fa-chart-pie" style="color: inherit !important;"></i>
+   426→                    </div>
+   427→                    <div class="mt-auto">
+   428→                        <h4 class="font-bold user-name text-sm">إحصائياتي</h4>
+   429→                        <p class="text-[10px] opacity-70">تابع تقدمك</p>
+   430→                    </div>
+   431→                </a>
+   432→            </div>
+   433→        </div>
+   434→
+   435→        <!-- Section 2: Challenge & Exams (المعدلة: كروت شفافة بإضاءة خلفية) -->
+   436→        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+   437→            
+   438→            <!-- كارت التحديات (إضاءة برتقالي) -->
+   439→            <a href="pvp/challenges.php" class="group relative overflow-hidden rounded-3xl p-6 glass-panel shadow-glow-orange transition-all">
+   440→                <div class="absolute top-0 left-0 w-32 h-32 bg-orange-500/20 rounded-full blur-3xl -ml-10 -mt-10 group-hover:bg-orange-500/30 transition-colors"></div>
+   441→                
+   442→                <div class="relative z-10 flex items-center justify-between">
+   443→                    <div>
+   444→                        <div class="w-10 h-10 rounded-xl bg-orange-500/20 backdrop-blur-md flex items-center justify-center text-lg mb-3 shadow-inner text-orange-500">
+   445→                            <i class="fas fa-trophy"></i>
+   446→                        </div>
+   447→                        <h3 class="text-xl font-black mb-1 user-name">ساحة المعركة</h3>
+   448→                        <p class="text-xs font-medium opacity-80 max-w-[200px]">تحدى أصدقاءك والروبوت في مواجهات مباشرة!</p>
+   449→                    </div>
+   450→                    <div class="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center text-orange-500 group-hover:bg-orange-500 group-hover:text-white transition-all">
+   451→                        <i class="fas fa-arrow-left rtl:rotate-180"></i>
+   452→                    </div>
+   453→                </div>
+   454→            </a>
+   455→
+   456→            <!-- كارت الامتحانات (إضاءة بنفسجي) -->
+   457→            <a href="exam/generate-exam.php" class="group relative overflow-hidden rounded-3xl p-6 glass-panel shadow-glow-purple transition-all">
+   458→                <div class="absolute top-0 left-0 w-32 h-32 bg-purple-500/20 rounded-full blur-3xl -ml-10 -mt-10 group-hover:bg-purple-500/30 transition-colors"></div>
+   459→                
+   460→                <div class="relative z-10 flex items-center justify-between">
+   461→                    <div>
+   462→                        <div class="w-10 h-10 rounded-xl bg-purple-500/20 backdrop-blur-md flex items-center justify-center text-lg mb-3 shadow-inner text-purple-500">
+   463→                            <i class="fas fa-file-signature"></i>
+   464→                        </div>
+   465→                        <h3 class="text-xl font-black mb-1 user-name">الاختبارات</h3>
+   466→                        <p class="text-xs font-medium opacity-80 max-w-[200px]">قم بإنشاء اختبارات مخصصة لتقييم مستواك.</p>
+   467→                    </div>
+   468→                    <div class="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center text-purple-500 group-hover:bg-purple-500 group-hover:text-white transition-all">
+   469→                        <i class="fas fa-arrow-left rtl:rotate-180"></i>
+   470→                    </div>
+   471→                </div>
+   472→            </a>
+   473→            
+   474→        </div>
+   475→        
+   476→        <!-- Footer Simple Info -->
+   477→        <div class="text-center text-[10px] font-mono pt-8 pb-4 opacity-50">
+   478→            School System v2.0 &copy; <?= date('Y') ?>
+   479→        </div>
+   480→
+   481→    </main>
+   482→
+   483→    <script>
+   484→        // --- Sidebar Logic ---
+   485→        function toggleSidebar() {
+   486→            const sidebar = document.getElementById('sidebar');
+   487→            const overlay = document.getElementById('sidebarOverlay');
+   488→            const isHidden = sidebar.classList.contains('-translate-x-full');
+   489→            
+   490→            if (!isHidden) {
+   491→                sidebar.classList.add('-translate-x-full');
+   492→                overlay.classList.remove('opacity-100');
+   493→                setTimeout(() => {
+   494→                    overlay.classList.add('hidden');
+   495→                }, 300);
+   496→            } else {
+   497→                overlay.classList.remove('hidden');
+   498→                void overlay.offsetWidth; 
+   499→                overlay.classList.add('opacity-100');
+   500→                sidebar.classList.remove('-translate-x-full');
+   501→            }
+   502→        }
+   503→
+   504→        // --- Theme Logic ---
+   505→        function toggleTheme() {
+   506→            document.body.classList.toggle('light-mode');
+   507→            const isLight = document.body.classList.contains('light-mode');
+   508→            localStorage.setItem('theme', isLight ? 'light' : 'dark');
+   509→            updateThemeIcon(isLight);
+   510→            
+   511→            const container = document.getElementById('arenaBg');
+   512→            container.innerHTML = ''; 
+   513→            createBackgroundSymbols();
+   514→        }
+   515→
+   516→        function updateThemeIcon(isLight) {
+   517→            const icon = document.getElementById('themeIcon');
+   518→            icon.textContent = isLight ? '☀️' : '🌙';
+   519→            icon.style.transform = 'rotate(360deg)';
+   520→            setTimeout(() => icon.style.transform = 'rotate(0deg)', 500);
+   521→        }
+   522→
+   523→        const savedTheme = localStorage.getItem('theme');
+   524→        if (savedTheme === 'light') {
+   525→            document.body.classList.add('light-mode');
+   526→            updateThemeIcon(true);
+   527→        }
+   528→
+   529→        // --- Background Animation ---
+   530→        function createBackgroundSymbols() {
+   531→            const symbols = ['+', '-', '÷', '×', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+   532→            const container = document.getElementById('arenaBg');
+   533→            if(!container) return;
+   534→            
+   535→            const isLight = document.body.classList.contains('light-mode');
+   536→            const count = 20; 
+   537→            for(let i=0; i<count; i++) {
+   538→                const span = document.createElement('span');
+   539→                span.classList.add('bg-symbol');
+   540→                span.innerText = symbols[Math.floor(Math.random() * symbols.length)];
+   541→                
+   542→                span.style.left = Math.random() * 100 + '%';
+   543→                span.style.top = Math.random() * 100 + '%';
+   544→                
+   545→                const size = Math.random() * 2 + 1.5; 
+   546→                span.style.fontSize = size + 'rem';
+   547→                
+   548→                const rotation = Math.random() * 360;
+   549→                span.style.transform = `rotate(${rotation}deg)`;
+   550→                
+   551→                const hue = Math.floor(Math.random() * 360);
+   552→                const lightness = isLight ? 30 : 65; 
+   553→                const saturation = isLight ? 50 : 20;
+   554→                
+   555→                span.style.color = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+   556→
+   557→                const duration = Math.random() * 5 + 5; 
+   558→                span.style.animationDuration = duration + 's';
+   559→                const delay = -(Math.random() * duration);
+   560→                span.style.animationDelay = delay + 's';
+   561→                
+   562→                container.appendChild(span);
+   563→            }
+   564→        }
+   565→        window.onload = createBackgroundSymbols;
+   566→
+   567→        // --- Expiry Warning Logic ---
+   568→        <?php if ($show_expiry_warning): ?>
+   569→        document.addEventListener('DOMContentLoaded', () => {
+   570→            Swal.fire({
+   571→                icon: 'warning',
+   572→                title: 'تنبيه هام',
+   573→                text: 'صلاحية اشتراكك قاربت على الانتهاء. يرجى مراجعة المدرب.',
+   574→                confirmButtonText: 'حسناً',
+   575→                confirmButtonColor: '#f59e0b',
+   576→                background: 'var(--glass-bg)',
+   577→                color: 'var(--text-primary)'
+   578→            });
+   579→        });
+   580→        <?php endif; ?>
+   581→    </script>
+   582→</body>
+   583→</html>

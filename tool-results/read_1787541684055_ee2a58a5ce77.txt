@@ -1,0 +1,692 @@
+     1→     1→<?php
+     2→     2→// This page now includes your existing config.php file first.
+     3→     3→require_once 'config.php'; 
+     4→     4→require_once 'game_functions.php';
+     5→     5→
+     6→     6→// Your config.php already handles session start and user checks.
+     7→     7→// We just need to ensure the user is logged in to play.
+     8→     8→if (!isset($_SESSION['user_id'])) {
+     9→     9→    // Redirect to login if not authenticated, as per your site's logic.
+    10→    10→    header('Location: login.php');
+    11→    11→    exit;
+    12→    12→}
+    13→    13→$user_id = $_SESSION['user_id'];
+    14→    14→// Assuming the username is stored in the session upon login
+    15→    15→$username = isset($_SESSION['username']) ? $_SESSION['username'] : 'Student';
+    16→    16→$message = '';
+    17→    17→
+    18→    18→// This block now handles both AJAX and regular form submissions.
+    19→    19→if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['results_json'])) {
+    20→    20→    // Verify CSRF token
+    21→    21→    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+    22→    22→        // For AJAX, send an error response. For regular post, die.
+    23→    23→        if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
+    24→    24→            http_response_code(403);
+    25→    25→            echo json_encode(['error' => 'CSRF validation failed']);
+    26→    26→            exit;
+    27→    27→        }
+    28→    28→        die("خطأ في التحقق من CSRF!");
+    29→    29→    }
+    30→    30→
+    31→    31→    // Sanitize inputs
+    32→    32→    $settings_json = filter_input(INPUT_POST, 'settings_json', FILTER_DEFAULT);
+    33→    33→    $results_json = filter_input(INPUT_POST, 'results_json', FILTER_DEFAULT);
+    34→    34→    
+    35→    35→    // The global $pdo object from your config.php is used here.
+    36→    36→    if (json_decode($settings_json) && json_decode($results_json) && isset($pdo)) {
+    37→    37→        if (saveTrainingResults($pdo, $user_id, 'division', $settings_json, $results_json)) {
+    38→    38→            // For AJAX, send a success response. For regular post, set a message.
+    39→    39→            if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
+    40→    40→                echo json_encode(['success' => 'Results saved.']);
+    41→    41→                exit;
+    42→    42→            }
+    43→    43→            $message = '<div class="alert alert-success mt-3">تم حفظ نتائج التدريب بنجاح!</div>';
+    44→    44→        } else {
+    45→    45→            $message = '<div class="alert alert-danger mt-3">حدث خطأ أثناء حفظ النتائج.</div>';
+    46→    46→        }
+    47→    47→    } else {
+    48→    48→        $message = '<div class="alert alert-danger mt-3">البيانات المرسلة غير صالحة.</div>';
+    49→    49→    }
+    50→    50→}
+    51→    51→
+    52→    52→// Generate a new token for the form load if it wasn't a POST request
+    53→    53→if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    54→    54→    if (function_exists('generateCSRF')) {
+    55→    55→        generateCSRF(); 
+    56→    56→    } else {
+    57→    57→        if (empty($_SESSION['csrf_token'])) {
+    58→    58→            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    59→    59→        }
+    60→    60→    }
+    61→    61→}
+    62→    62→?>
+    63→    63→<!DOCTYPE html>
+    64→    64→<html lang="ar" dir="rtl">
+    65→    65→<head>
+    66→    66→    <meta charset="UTF-8">
+    67→    67→    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    68→    68→    <title>لعبة القسمة</title>
+    69→    69→    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    70→    70→    <link rel="preconnect" href="https://fonts.googleapis.com">
+    71→    71→    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    72→    72→    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap" rel="stylesheet">
+    73→    73→    <style>
+    74→    74→        :root {
+    75→    75→            --primary-color: #28a745; /* Green theme */
+    76→    76→            --primary-dark: #198754;
+    77→    77→            --success-color: #198754;
+    78→    78→            --danger-color: #dc3545;
+    79→    79→            --light-bg: #e9f7ef;
+    80→    80→            --card-bg: #ffffff;
+    81→    81→            --text-color: #212529;
+    82→    82→            --border-color: #dee2e6;
+    83→    83→        }
+    84→    84→        body { 
+    85→    85→            background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+    86→    86→            font-family: 'Cairo', sans-serif; 
+    87→    87→            transition: padding-bottom 0.3s ease;
+    88→    88→        }
+    89→    89→        .game-card { 
+    90→    90→            background-color: var(--card-bg); 
+    91→    91→            border-radius: 25px; 
+    92→    92→            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+    93→    93→            border: 1px solid rgba(255,255,255,0.5);
+    94→    94→            padding: 2.5rem !important;
+    95→    95→        }
+    96→    96→        .game-header h1 {
+    97→    97→            font-weight: 700;
+    98→    98→            color: var(--primary-color);
+    99→    99→        }
+   100→   100→        fieldset {
+   101→   101→            background-color: var(--light-bg);
+   102→   102→            border: 1px solid var(--border-color);
+   103→   103→            border-radius: 15px;
+   104→   104→            padding: 1.5rem !important;
+   105→   105→        }
+   106→   106→        legend { color: var(--primary-color); }
+   107→   107→        .form-range::-webkit-slider-thumb { background-color: var(--primary-color); }
+   108→   108→        .btn-check:checked+.btn-outline-primary {
+   109→   109→            background-color: var(--primary-color);
+   110→   110→            border-color: var(--primary-color);
+   111→   111→            color: white;
+   112→   112→        }
+   113→   113→        .btn {
+   114→   114→            border-radius: 50px !important;
+   115→   115→            padding: 0.75rem 1.25rem;
+   116→   116→            font-weight: 700;
+   117→   117→            transition: all 0.2s ease-in-out;
+   118→   118→        }
+   119→   119→        .btn-success {
+   120→   120→            background: linear-gradient(45deg, var(--primary-color), var(--primary-dark));
+   121→   121→            border: none;
+   122→   122→        }
+   123→   123→        .btn:hover { transform: translateY(-2px); }
+   124→   124→        .question-box-wrapper { min-height: 150px; display: flex; align-items: center; justify-content: center; }
+   125→   125→        .question-box {
+   126→   126→            font-size: 3.5rem; font-weight: 700; color: #fff;
+   127→   127→            background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+   128→   128→            border-radius: 15px;
+   129→   129→            padding: 1rem 2rem;
+   130→   130→            box-shadow: 0 5px 15px rgba(40, 167, 69, 0.4);
+   131→   131→            display: inline-flex; align-items: center; justify-content: center;
+   132→   132→            transition: opacity 0.2s ease-in-out; opacity: 0; width: auto;
+   133→   133→        }
+   134→   134→        .fade-in { opacity: 1 !important; }
+   135→   135→        .feedback { font-size: 1.5rem; font-weight: bold; min-height: 30px; }
+   136→   136→        .correct { color: var(--success-color); }
+   137→   137→        .incorrect { color: var(--danger-color); }
+   138→   138→        .form-control, .form-select { border-radius: 50px; }
+   139→   139→        #answerInput { border-radius: 50px; border: 2px solid var(--border-color); }
+   140→   140→        #answerInput:focus {
+   141→   141→            border-color: var(--primary-color);
+   142→   142→            box-shadow: 0 0 0 0.25rem rgba(40, 167, 69, 0.25);
+   143→   143→        }
+   144→   144→        .number-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-width: 320px; margin: auto; }
+   145→   145→        .number-pad button { font-size: 1.75rem; font-weight: 700; border-radius: 50px !important; height: 60px; }
+   146→   146→        .progress { height: 1rem; border-radius: 50px; }
+   147→   147→        .progress-bar { background-color: var(--primary-color); border-radius: 50px; }
+   148→   148→        .modal-body .table td, .modal-body .table th { vertical-align: middle; text-align: center; }
+   149→   149→        .correct-icon { color: var(--success-color); }
+   150→   150→        .incorrect-icon { color: var(--danger-color); }
+   151→   151→        
+   152→   152→        #gameArea {
+   153→   153→            display: none;
+   154→   154→        }
+   155→   155→        .game-content-wrapper {
+   156→   156→            display: flex;
+   157→   157→            flex-direction: column;
+   158→   158→            justify-content: center;
+   159→   159→            min-height: 280px; /* Stabilize layout */
+   160→   160→        }
+   161→   161→    </style>
+   162→   162→</head>
+   163→   163→<body>
+   164→   164→    <div class="container my-5">
+   165→   165→        <div class="game-card">
+   166→   166→            <div class="text-center mb-4 game-header">
+   167→   167→                <h1>لعبة القسمة</h1>
+   168→   168→                <p class="lead">اختر الإعدادات المناسبة وتحدى نفسك في مسائل القسمة.</p>
+   169→   169→                <div id="navButtons" class="mt-2">
+   170→   170→                     <a href="dashboard.php" class="btn btn-outline-secondary">العودة للرئيسية</a>
+   171→   171→                </div>
+   172→   172→            </div>
+   173→   173→            
+   174→   174→            <div id="messageContainer">
+   175→   175→                <?php echo $message; ?>
+   176→   176→            </div>
+   177→   177→
+   178→   178→            <form id="settingsForm">
+   179→   179→                <input type="hidden" id="csrf_token_hidden" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
+   180→   180→                <div class="row g-4" id="settingsArea">
+   181→   181→                    <div class="col-lg-6">
+   182→   182→                        <fieldset class="border p-3 rounded h-100">
+   183→   183→                            <legend class="w-auto px-2 fs-5">إعدادات المسألة</legend>
+   184→   184→                            <div class="mb-3">
+   185→   185→                                <label for="dividendLength" class="form-label fw-bold">عدد خانات المقسوم:</label>
+   186→   186→                                <select id="dividendLength" class="form-select">
+   187→   187→                                    <option value="2" selected>2 رقم</option>
+   188→   188→                                    <option value="3">3 أرقام</option>
+   189→   189→                                    <option value="4">4 أرقام</option>
+   190→   190→                                </select>
+   191→   191→                            </div>
+   192→   192→                            <div class="mb-3">
+   193→   193→                                <label for="divisorLength" class="form-label fw-bold">عدد خانات المقسوم عليه:</label>
+   194→   194→                                <select id="divisorLength" class="form-select">
+   195→   195→                                    <option value="1" selected>1 رقم</option>
+   196→   196→                                    <option value="2">2 رقم</option>
+   197→   197→                                </select>
+   198→   198→                            </div>
+   199→   199→                        </fieldset>
+   200→   200→                    </div>
+   201→   201→                    <div class="col-lg-6">
+   202→   202→                        <fieldset class="border p-3 rounded h-100">
+   203→   203→                            <legend class="w-auto px-2 fs-5">إعدادات التدريب</legend>
+   204→   204→                             <div class="mb-3">
+   205→   205→                                <label class="form-label fw-bold d-block">طريقة الإدخال:</label>
+   206→   206→                                <div class="btn-group w-100" role="group">
+   207→   207→                                    <input type="radio" class="btn-check" name="inputMethod" id="inputOnscreen" value="onscreen" autocomplete="off" checked>
+   208→   208→                                    <label class="btn btn-outline-primary" for="inputOnscreen">كيبورد المنصة</label>
+   209→   209→                                    <input type="radio" class="btn-check" name="inputMethod" id="inputComputer" value="computer" autocomplete="off">
+   210→   210→                                    <label class="btn btn-outline-primary" for="inputComputer">كيبورد الكمبيوتر</label>
+   211→   211→                                </div>
+   212→   212→                            </div>
+   213→   213→                            <div class="mb-3">
+   214→   214→                                <label for="numQuestions" class="form-label fw-bold">عدد المسائل:</label>
+   215→   215→                                <input type="number" class="form-control" id="numQuestions" value="10" min="5" max="50" required>
+   216→   216→                            </div>
+   217→   217→                            <div class="mb-3">
+   218→   218→                                <label for="displayTime" class="form-label fw-bold">زمن ظهور الرقم (ثانية): <span id="displayTimeValue">2.0</span></label>
+   219→   219→                                <input type="range" class="form-range" id="displayTime" min="0.5" max="7" value="2.0" step="0.1">
+   220→   220→                            </div>
+   221→   221→                            <div class="mb-3">
+   222→   222→                                <label for="disappearTime" class="form-label fw-bold">زمن اختفاء الرقم (ثانية): <span id="disappearTimeValue">0.5</span></label>
+   223→   223→                                <input type="range" class="form-range" id="disappearTime" min="0.1" max="3" value="0.5" step="0.1">
+   224→   224→                            </div>
+   225→   225→                            <button id="startGameBtn" type="submit" class="btn btn-success w-100 mt-3 fs-5">🚀 ابدأ التدريب!</button>
+   226→   226→                        </fieldset>
+   227→   227→                    </div>
+   228→   228→                </div>
+   229→   229→            </form>
+   230→   230→
+   231→   231→            <!-- Game Area -->
+   232→   232→            <div id="gameArea" class="mt-5 text-center">
+   233→   233→                <div class="game-content-wrapper">
+   234→   234→                    <h5 class="mb-3">المسألة: <span id="currentQuestionNum">1</span> / <span id="totalQuestionNum">10</span></h5>
+   235→   235→                    <div class="progress mb-4">
+   236→   236→                        <div id="gameProgress" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+   237→   237→                    </div>
+   238→   238→                    <div class="question-box-wrapper">
+   239→   239→                        <div class="question-box" id="questionBox"></div>
+   240→   240→                    </div>
+   241→   241→                    <div class="feedback my-2" id="feedback"></div>
+   242→   242→                </div>
+   243→   243→                <div id="inputArea" class="mt-3">
+   244→   244→                    <input type="number" class="form-control form-control-lg text-center w-75 mx-auto" id="answerInput" placeholder="أدخل إجابتك هنا">
+   245→   245→                    <div class="number-pad mt-3" id="numberPad"></div>
+   246→   246→                </div>
+   247→   247→                <button id="stopGameBtn" class="btn btn-danger mt-4">إيقاف التدريب</button>
+   248→   248→            </div>
+   249→   249→        </div>
+   250→   250→    </div>
+   251→   251→    
+   252→   252→    <!-- Results Modal -->
+   253→   253→    <div class="modal fade" id="resultsModal" tabindex="-1" aria-labelledby="resultsModalLabel" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+   254→   254→        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+   255→   255→            <div class="modal-content">
+   256→   256→                <div class="modal-header">
+   257→   257→                    <h5 class="modal-title" id="resultsModalLabel">تقرير نتائج التدريب</h5>
+   258→   258→                </div>
+   259→   259→                <div class="modal-body">
+   260→   260→                    <div class="text-center mb-2" id="saveStatus"></div>
+   261→   261→                    <div class="row text-center mb-4">
+   262→   262→                        <div class="col-md-3">
+   263→   263→                            <div class="card bg-light">
+   264→   264→                                <div class="card-body">
+   265→   265→                                    <h6 class="card-title">تاريخ التدريب</h6>
+   266→   266→                                    <p class="fs-5 fw-bold mb-0" id="trainingDate"></p>
+   267→   267→                                </div>
+   268→   268→                            </div>
+   269→   269→                        </div>
+   270→   270→                        <div class="col-md-3">
+   271→   271→                             <div class="card text-white bg-success">
+   272→   272→                                <div class="card-body">
+   273→   273→                                    <h6 class="card-title">الإجابات الصحيحة</h6>
+   274→   274→                                    <p class="fs-5 fw-bold mb-0" id="correctCount"></p>
+   275→   275→                                </div>
+   276→   276→                            </div>
+   277→   277→                        </div>
+   278→   278→                        <div class="col-md-3">
+   279→   279→                            <div class="card text-white bg-danger">
+   280→   280→                                <div class="card-body">
+   281→   281→                                    <h6 class="card-title">الإجابات الخاطئة</h6>
+   282→   282→                                    <p class="fs-5 fw-bold mb-0" id="incorrectCount"></p>
+   283→   283→                                </div>
+   284→   284→                            </div>
+   285→   285→                        </div>
+   286→   286→                        <div class="col-md-3">
+   287→   287→                             <div class="card bg-light">
+   288→   288→                                <div class="card-body">
+   289→   289→                                    <h6 class="card-title">متوسط زمن الإجابة</h6>
+   290→   290→                                    <p class="fs-5 fw-bold mb-0" id="avgTime"></p>
+   291→   291→                                </div>
+   292→   292→                            </div>
+   293→   293→                        </div>
+   294→   294→                    </div>
+   295→   295→                    <div class="table-responsive">
+   296→   296→                        <table class="table table-bordered table-striped">
+   297→   297→                            <thead class="table-dark">
+   298→   298→                                <tr>
+   299→   299→                                    <th>#</th>
+   300→   300→                                    <th>المسألة</th>
+   301→   301→                                    <th>إجابتك</th>
+   302→   302→                                    <th>الإجابة الصحيحة</th>
+   303→   303→                                    <th>الزمن (ثانية)</th>
+   304→   304→                                    <th>النتيجة</th>
+   305→   305→                                </tr>
+   306→   306→                            </thead>
+   307→   307→                            <tbody id="resultsTableBody">
+   308→   308→                                <!-- Results will be populated by JS -->
+   309→   309→                            </tbody>
+   310→   310→                        </table>
+   311→   311→                    </div>
+   312→   312→                </div>
+   313→   313→                <div class="modal-footer">
+   314→   314→                    <button type="button" class="btn btn-success" id="downloadPdfBtn">📥 تحميل PDF</button>
+   315→   315→                    <button type="button" class="btn btn-primary" id="playAgainBtn">العب مرة أخرى</button>
+   316→   316→                </div>
+   317→   317→            </div>
+   318→   318→        </div>
+   319→   319→    </div>
+   320→   320→
+   321→   321→    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+   322→   322→    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+   323→   323→    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+   324→   324→    
+   325→   325→    <script>
+   326→   326→    document.addEventListener('DOMContentLoaded', function() {
+   327→   327→        const studentName = "<?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>";
+   328→   328→        // UI Elements
+   329→   329→        const settingsForm = document.getElementById('settingsForm');
+   330→   330→        const settingsArea = document.getElementById('settingsArea');
+   331→   331→        const startGameBtn = document.getElementById('startGameBtn');
+   332→   332→        const stopGameBtn = document.getElementById('stopGameBtn');
+   333→   333→        const gameArea = document.getElementById('gameArea');
+   334→   334→        const questionBox = document.getElementById('questionBox');
+   335→   335→        const answerInput = document.getElementById('answerInput');
+   336→   336→        const feedback = document.getElementById('feedback');
+   337→   337→        const currentQuestionNumEl = document.getElementById('currentQuestionNum');
+   338→   338→        const totalQuestionNumEl = document.getElementById('totalQuestionNum');
+   339→   339→        const displayTimeSlider = document.getElementById('displayTime');
+   340→   340→        const displayTimeValue = document.getElementById('displayTimeValue');
+   341→   341→        const disappearTimeSlider = document.getElementById('disappearTime');
+   342→   342→        const disappearTimeValue = document.getElementById('disappearTimeValue');
+   343→   343→        const gameProgress = document.getElementById('gameProgress');
+   344→   344→        const numberPad = document.getElementById('numberPad');
+   345→   345→        const navButtons = document.getElementById('navButtons');
+   346→   346→        const messageContainer = document.getElementById('messageContainer');
+   347→   347→        const resultsModal = new bootstrap.Modal(document.getElementById('resultsModal'));
+   348→   348→        const downloadPdfBtn = document.getElementById('downloadPdfBtn');
+   349→   349→        const playAgainBtn = document.getElementById('playAgainBtn');
+   350→   350→
+   351→   351→        // Game state
+   352→   352→        let currentQuestion = {};
+   353→   353→        let questionCount = 0;
+   354→   354→        let totalQuestions = 0;
+   355→   355→        let questionStartTime;
+   356→   356→        let gameResults = [];
+   357→   357→        let gameSettings = {};
+   358→   358→        let isGameRunning = false;
+   359→   359→        let termDisplayTimeout;
+   360→   360→
+   361→   361→        const alertMessage = messageContainer.querySelector('.alert');
+   362→   362→        if (alertMessage) {
+   363→   363→            setTimeout(() => {
+   364→   364→                alertMessage.style.transition = 'opacity 0.5s ease';
+   365→   365→                alertMessage.style.opacity = '0';
+   366→   366→                setTimeout(() => alertMessage.remove(), 500);
+   367→   367→            }, 5000);
+   368→   368→        }
+   369→   369→
+   370→   370→        displayTimeSlider.addEventListener('input', () => { displayTimeValue.textContent = displayTimeSlider.value; });
+   371→   371→        disappearTimeSlider.addEventListener('input', () => { disappearTimeValue.textContent = disappearTimeSlider.value; });
+   372→   372→
+   373→   373→        const padLayout = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+   374→   374→        padLayout.forEach(num => {
+   375→   375→            numberPad.innerHTML += `<button class="btn btn-light border">${num}</button>`;
+   376→   376→        });
+   377→   377→        numberPad.innerHTML += `
+   378→   378→            <button class="btn btn-warning" id="deleteBtn">حذف</button>
+   379→   379→            <button class="btn btn-light border">0</button>
+   380→   380→            <button class="btn btn-primary" id="submitBtn">تأكيد</button>`;
+   381→   381→        
+   382→   382→        numberPad.addEventListener('click', (e) => {
+   383→   383→            if (e.target.tagName === 'BUTTON' && !isNaN(e.target.textContent)) {
+   384→   384→                answerInput.value += e.target.textContent;
+   385→   385→            } else if (e.target.id === 'deleteBtn') {
+   386→   386→                answerInput.value = answerInput.value.slice(0, -1);
+   387→   387→            } else if (e.target.id === 'submitBtn') {
+   388→   388→                checkAnswer();
+   389→   389→            }
+   390→   390→        });
+   391→   391→
+   392→   392→        answerInput.addEventListener('keydown', (e) => {
+   393→   393→            if (e.key === 'Enter') checkAnswer();
+   394→   394→        });
+   395→   395→
+   396→   396→        settingsForm.addEventListener('submit', function(e) {
+   397→   397→            e.preventDefault();
+   398→   398→            startGame();
+   399→   399→        });
+   400→   400→        stopGameBtn.addEventListener('click', () => endGame(false));
+   401→   401→        downloadPdfBtn.addEventListener('click', generatePDF);
+   402→   402→        playAgainBtn.addEventListener('click', () => { window.location.reload(); });
+   403→   403→
+   404→   404→        function startGame() {
+   405→   405→            if (isGameRunning) return;
+   406→   406→            isGameRunning = true;
+   407→   407→            
+   408→   408→            gameSettings = {
+   409→   409→                dividendLength: parseInt(document.getElementById('dividendLength').value),
+   410→   410→                divisorLength: parseInt(document.getElementById('divisorLength').value),
+   411→   411→                displayTime: parseFloat(displayTimeSlider.value) * 1000,
+   412→   412→                disappearTime: parseFloat(disappearTimeSlider.value) * 1000,
+   413→   413→                numQuestions: parseInt(document.getElementById('numQuestions').value),
+   414→   414→                inputMethod: document.querySelector('input[name="inputMethod"]:checked').value
+   415→   415→            };
+   416→   416→
+   417→   417→            totalQuestions = gameSettings.numQuestions;
+   418→   418→            totalQuestionNumEl.textContent = totalQuestions;
+   419→   419→            questionCount = 0;
+   420→   420→            gameResults = [];
+   421→   421→            
+   422→   422→            if (gameSettings.inputMethod === 'computer') {
+   423→   423→                numberPad.style.display = 'none';
+   424→   424→                answerInput.readOnly = false;
+   425→   425→            } else {
+   426→   426→                numberPad.style.display = 'grid';
+   427→   427→                answerInput.readOnly = true;
+   428→   428→            }
+   429→   429→            
+   430→   430→            settingsArea.style.display = 'none';
+   431→   431→            navButtons.style.display = 'none';
+   432→   432→            gameArea.style.display = 'block';
+   433→   433→
+   434→   434→            nextQuestion();
+   435→   435→        }
+   436→   436→
+   437→   437→        function generateQuestion() {
+   438→   438→            const getNum = (digits) => {
+   439→   439→                if (digits === 1) return Math.floor(Math.random() * 9) + 2; // Divisor > 1
+   440→   440→                const min = Math.pow(10, digits - 1);
+   441→   441→                const max = Math.pow(10, digits) - 1;
+   442→   442→                return Math.floor(Math.random() * (max - min + 1)) + min;
+   443→   443→            };
+   444→   444→            
+   445→   445→            let dividend, divisor, quotient;
+   446→   446→            
+   447→   447→            while(true) {
+   448→   448→                divisor = getNum(gameSettings.divisorLength);
+   449→   449→                // To ensure the dividend is large enough, let's derive it
+   450→   450→                const minQuotient = 2;
+   451→   451→                const maxQuotient = Math.pow(10, gameSettings.dividendLength - gameSettings.divisorLength) -1;
+   452→   452→                const safeMaxQuotient = Math.max(minQuotient, maxQuotient);
+   453→   453→                
+   454→   454→                quotient = Math.floor(Math.random() * (safeMaxQuotient - minQuotient + 1)) + minQuotient;
+   455→   455→                
+   456→   456→                dividend = divisor * quotient;
+   457→   457→
+   458→   458→                // Check if dividend respects the number of digits
+   459→   459→                const dividendStr = dividend.toString();
+   460→   460→                if (dividendStr.length <= gameSettings.dividendLength) {
+   461→   461→                    break;
+   462→   462→                }
+   463→   463→            }
+   464→   464→            
+   465→   465→            return { terms: [dividend, '÷', divisor], answer: quotient };
+   466→   466→        }
+   467→   467→
+   468→   468→        function nextQuestion() {
+   469→   469→            if (questionCount >= totalQuestions) {
+   470→   470→                endGame(true);
+   471→   471→                return;
+   472→   472→            }
+   473→   473→            
+   474→   474→            questionCount++;
+   475→   475→            currentQuestionNumEl.textContent = questionCount;
+   476→   476→            const progress = (questionCount / totalQuestions) * 100;
+   477→   477→            gameProgress.style.width = `${progress}%`;
+   478→   478→
+   479→   479→            currentQuestion = generateQuestion();
+   480→   480→
+   481→   481→            answerInput.value = '';
+   482→   482→            answerInput.disabled = true;
+   483→   483→            feedback.textContent = '';
+   484→   484→            
+   485→   485→            displayQuestionSequentially(currentQuestion.terms);
+   486→   486→        }
+   487→   487→        
+   488→   488→        function displayQuestionSequentially(terms) {
+   489→   489→            questionBox.textContent = '';
+   490→   490→            let i = 0;
+   491→   491→            
+   492→   492→            function showNextTerm() {
+   493→   493→                if (!isGameRunning) return;
+   494→   494→
+   495→   495→                if (i < terms.length) {
+   496→   496→                    let termToShow = terms[i];
+   497→   497→                    
+   498→   498→                    questionBox.textContent = termToShow;
+   499→   499→                    questionBox.classList.add('fade-in');
+   500→   500→
+   501→   501→                    termDisplayTimeout = setTimeout(() => {
+   502→   502→                        if (!isGameRunning) return;
+   503→   503→                        questionBox.classList.remove('fade-in');
+   504→   504→
+   505→   505→                        setTimeout(() => {
+   506→   506→                            if (!isGameRunning) return;
+   507→   507→                            i++;
+   508→   508→                            showNextTerm(); 
+   509→   509→                        }, gameSettings.disappearTime);
+   510→   510→
+   511→   511→                    }, gameSettings.displayTime);
+   512→   512→
+   513→   513→                } else {
+   514→   514→                    questionBox.textContent = '؟';
+   515→   515→                    questionBox.classList.add('fade-in');
+   516→   516→                    answerInput.disabled = false;
+   517→   517→                    
+   518→   518→                    setTimeout(() => {
+   519→   519→                        answerInput.focus();
+   520→   520→                        if (gameSettings.inputMethod === 'computer') {
+   521→   521→                           answerInput.scrollIntoView({ behavior: "smooth", block: "center" });
+   522→   522→                        }
+   523→   523→                    }, 100);
+   524→   524→
+   525→   525→                    questionStartTime = Date.now();
+   526→   526→                }
+   527→   527→            }
+   528→   528→            showNextTerm();
+   529→   529→        }
+   530→   530→
+   531→   531→
+   532→   532→        function checkAnswer() {
+   533→   533→            if (answerInput.disabled) return;
+   534→   534→            const userAnswer = parseInt(answerInput.value);
+   535→   535→            const timeTaken = (Date.now() - questionStartTime) / 1000;
+   536→   536→            const isCorrect = userAnswer === currentQuestion.answer;
+   537→   537→
+   538→   538→            gameResults.push({
+   539→   539→                question: `${currentQuestion.terms[0]} ÷ ${currentQuestion.terms[2]}`,
+   540→   540→                userAnswer: isNaN(userAnswer) ? "No Answer" : userAnswer,
+   541→   541→                correctAnswer: currentQuestion.answer,
+   542→   542→                isCorrect: isCorrect,
+   543→   543→                timeTaken: timeTaken.toFixed(2)
+   544→   544→            });
+   545→   545→
+   546→   546→            if (isCorrect) {
+   547→   547→                feedback.textContent = 'رائع!';
+   548→   548→                feedback.className = 'feedback correct';
+   549→   549→            } else {
+   550→   550→                feedback.textContent = `للأسف! الإجابة الصحيحة: ${currentQuestion.answer}`;
+   551→   551→                feedback.className = 'feedback incorrect';
+   552→   552→            }
+   553→   553→            
+   554→   554→            answerInput.disabled = true;
+   555→   555→            questionBox.classList.remove('fade-in');
+   556→   556→            
+   557→   557→            if (gameSettings.inputMethod !== 'computer') {
+   558→   558→                 setTimeout(nextQuestion, 1500);
+   559→   559→            } else {
+   560→   560→                // For computer keyboard, keep focus and move to next question faster
+   561→   561→                answerInput.blur(); // Briefly blur to allow UI update
+   562→   562→                setTimeout(() => {
+   563→   563→                    nextQuestion();
+   564→   564→                }, 1500);
+   565→   565→            }
+   566→   566→        }
+   567→   567→
+   568→   568→        function endGame(completed = true) {
+   569→   569→            clearTimeout(termDisplayTimeout);
+   570→   570→            if (!isGameRunning) return;
+   571→   571→            isGameRunning = false;
+   572→   572→            
+   573→   573→            gameArea.style.display = 'none';
+   574→   574→
+   575→   575→            if (completed && gameResults.length > 0) {
+   576→   576→                saveResultsAutomatically();
+   577→   577→                showResultsPopup();
+   578→   578→            } else {
+   579→   579→                settingsArea.style.display = 'flex';
+   580→   580→                navButtons.style.display = 'block';
+   581→   581→            }
+   582→   582→        }
+   583→   583→
+   584→   584→        function saveResultsAutomatically() {
+   585→   585→            const statusDiv = document.getElementById('saveStatus');
+   586→   586→            statusDiv.innerHTML = `<span class="text-primary">جاري حفظ النتائج...</span> <div class="spinner-border spinner-border-sm text-primary" role="status"></div>`;
+   587→   587→            const formData = new FormData();
+   588→   588→            formData.append('settings_json', JSON.stringify(gameSettings));
+   589→   589→            formData.append('results_json', JSON.stringify(gameResults));
+   590→   590→            formData.append('csrf_token', document.getElementById('csrf_token_hidden').value);
+   591→   591→            fetch('', {
+   592→   592→                method: 'POST',
+   593→   593→                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+   594→   594→                body: formData
+   595→   595→            })
+   596→   596→            .then(response => {
+   597→   597→                if(response.ok) return response.json();
+   598→   598→                throw new Error('Network response was not ok.');
+   599→   599→            })
+   600→   600→            .then(data => {
+   601→   601→                if (data.success) {
+   602→   602→                    statusDiv.innerHTML = `<span class="text-success">✔ تم حفظ النتائج بنجاح!</span>`;
+   603→   603→                } else {
+   604→   604→                     throw new Error(data.error || 'Unknown error occurred.');
+   605→   605→                }
+   606→   606→            })
+   607→   607→            .catch(error => {
+   608→   608→                console.error('Error saving results:', error);
+   609→   609→                statusDiv.innerHTML = `<span class="text-danger">✖ فشل حفظ النتائج.</span>`;
+   610→   610→            });
+   611→   611→        }
+   612→   612→
+   613→   613→        function showResultsPopup() {
+   614→   614→            let correct = 0;
+   615→   615→            let totalTime = 0;
+   616→   616→            const tableBody = document.getElementById('resultsTableBody');
+   617→   617→            tableBody.innerHTML = ''; 
+   618→   618→            gameResults.forEach((result, index) => {
+   619→   619→                if(result.isCorrect) correct++;
+   620→   620→                totalTime += parseFloat(result.timeTaken);
+   621→   621→                const resultIcon = result.isCorrect 
+   622→   622→                    ? `<span class="correct-icon">✔</span>` 
+   623→   623→                    : `<span class="incorrect-icon">✖</span>`;
+   624→   624→                const row = `
+   625→   625→                    <tr>
+   626→   626→                        <td>${index + 1}</td>
+   627→   627→                        <td class="text-start">${result.question}</td>
+   628→   628→                        <td>${result.userAnswer}</td>
+   629→   629→                        <td>${result.correctAnswer}</td>
+   630→   630→                        <td>${result.timeTaken}</td>
+   631→   631→                        <td>${resultIcon}</td>
+   632→   632→                    </tr>`;
+   633→   633→                tableBody.innerHTML += row;
+   634→   634→            });
+   635→   635→            const total = gameResults.length;
+   636→   636→            document.getElementById('trainingDate').textContent = new Date().toLocaleDateString('ar-EG');
+   637→   637→            document.getElementById('correctCount').textContent = `${correct} / ${total}`;
+   638→   638→            document.getElementById('incorrectCount').textContent = `${total - correct} / ${total}`;
+   639→   639→            document.getElementById('avgTime').textContent = total > 0 ? `${(totalTime / total).toFixed(2)} ث` : '0 ث';
+   640→   640→            resultsModal.show();
+   641→   641→        }
+   642→   642→
+   643→   643→        function generatePDF() {
+   644→   644→            const { jsPDF } = window.jspdf;
+   645→   645→            const doc = new jsPDF();
+   646→   646→            const trainingDate = new Date().toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' });
+   647→   647→            
+   648→   648→            doc.setFontSize(20);
+   649→   649→            doc.text('Training Results Report', 105, 20, { align: 'center' });
+   650→   650→            
+   651→   651→            doc.setFontSize(12);
+   652→   652→            doc.text(`Student Name: ${studentName}`, 14, 30);
+   653→   653→            doc.text(`Date: ${trainingDate}`, 196, 30, { align: 'right' });
+   654→   654→
+   655→   655→            const tableColumn = ["#", "Question", "Your Answer", "Correct Answer", "Time (s)", "Result"];
+   656→   656→            const tableRows = [];
+   657→   657→
+   658→   658→            gameResults.forEach((res, i) => {
+   659→   659→                const rowData = [
+   660→   660→                    i + 1, res.question, res.userAnswer, res.correctAnswer, res.timeTaken,
+   661→   661→                    res.isCorrect ? 'Correct' : 'Incorrect',
+   662→   662→                ];
+   663→   663→                tableRows.push(rowData);
+   664→   664→            });
+   665→   665→
+   666→   666→            doc.autoTable({
+   667→   667→                head: [tableColumn], body: tableRows, startY: 40, theme: 'grid',
+   668→   668→                styles: { halign: 'center', cellPadding: 2 },
+   669→   669→                headStyles: { fillColor: [40, 167, 69], textColor: 255, fontStyle: 'bold' },
+   670→   670→                columnStyles: { 1: { halign: 'left' } },
+   671→   671→                didParseCell: function (data) {
+   672→   672→                    if (data.body) {
+   673→   673→                        if (data.cell.raw === 'Correct') {
+   674→   674→                            data.cell.styles.textColor = '#198754';
+   675→   675→                            data.cell.text = 'Correct ✔';
+   676→   676→                        }
+   677→   677→                        if (data.cell.raw === 'Incorrect') {
+   678→   678→                            data.cell.styles.textColor = '#dc3545';
+   679→   679→                            data.cell.text = 'Incorrect ✖';
+   680→   680→                        }
+   681→   681→                    }
+   682→   682→                }
+   683→   683→            });
+   684→   684→
+   685→   685→            const fileName = `Training-Results-${studentName.replace(/ /g, '_')}-${new Date().toISOString().slice(0,10)}.pdf`;
+   686→   686→            doc.save(fileName);
+   687→   687→        }
+   688→   688→    });
+   689→   689→    </script>
+   690→   690→</body>
+   691→   691→</html>
+   692→   692→
