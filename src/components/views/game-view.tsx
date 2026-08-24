@@ -6,6 +6,7 @@ import { ViewId, useUIStore } from "@/lib/ui-store";
 import { useAuth } from "@/components/auth-context";
 import {
   generateQuestion,
+  makeRng,
   GameSettings,
   QuestionType,
   Question,
@@ -196,6 +197,14 @@ function MathGameInner({
     }
   }, [view, params, meta.type]);
 
+  // Solving method (add/sub only): direct | friendsOf5 | friendsOf10.
+  // Parsed separately from params because GameSettings (lib/game) doesn't
+  // carry it yet — it still flows into the saved payload below.
+  const solvingMethod = useMemo(
+    () => parseSolvingMethod(params.solvingMethod),
+    [params.solvingMethod]
+  );
+
   // ----- Game state -----
   const [phase, setPhase] = useState<"countdown" | "playing" | "results">("countdown");
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -214,8 +223,27 @@ function MathGameInner({
 
   // Generate first question when countdown completes
   const generateFor = useCallback(
-    (index: number): Question => generateQuestion({ ...settings, seed: settings.seed ?? "x" }, String(index)),
-    [settings]
+    (index: number): Question => {
+      // أصدقاء الخمسة/العشرة: complement-pair generation, seeded with the
+      // SAME `seed-type-index` derivation as lib/game's generateQuestion
+      // so every (seed, index) is fully deterministic.
+      if (
+        meta.type === "addition_subtraction" &&
+        (solvingMethod === "friendsOf5" || solvingMethod === "friendsOf10")
+      ) {
+        const rng = makeRng(
+          `${settings.seed ?? "default"}-addition_subtraction-${index}`
+        );
+        return generateAddSubFriends(
+          rng,
+          solvingMethod,
+          settings.numberLength ?? 1,
+          settings.termsCount ?? 2
+        );
+      }
+      return generateQuestion({ ...settings, seed: settings.seed ?? "x" }, String(index));
+    },
+    [settings, solvingMethod, meta.type]
   );
 
   useEffect(() => {
@@ -311,7 +339,12 @@ function MathGameInner({
         credentials: "same-origin",
         body: JSON.stringify({
           gameType: meta.type,
-          settings,
+          // solvingMethod rides along for add/sub so the persisted settings
+          // record which technique was trained.
+          settings:
+            meta.type === "addition_subtraction"
+              ? { ...settings, solvingMethod }
+              : settings,
           seed: settings.seed,
           answers: results.map((r) => ({ questionIndex: r.questionIndex, userAnswer: r.userAnswer })),
           timesMs,
@@ -346,7 +379,7 @@ function MathGameInner({
   if (phase === "countdown") {
     return (
       <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6" dir="rtl">
-        <PreGameCard settings={settings} meta={meta} />
+        <PreGameCard settings={settings} meta={meta} solvingMethod={solvingMethod} />
         <Countdown onComplete={() => setPhase("playing")} />
       </div>
     );
@@ -371,7 +404,7 @@ function MathGameInner({
           averageTimeMs={averageTimeMs}
           studentName={user?.studentName ?? "طالب"}
           gameTitle={meta.title}
-          settingsSummary={summarizeSettings(settings)}
+          settingsSummary={summarizeSettings(settings, solvingMethod)}
           dateLabel={new Date().toLocaleString("ar-EG")}
           saving={saving}
           onSave={handleSave}
@@ -421,7 +454,12 @@ function MathGameInner({
       {/* Question card */}
       <Card className={`glass border border-[var(--glass-border)] p-4 sm:p-6`}>
         <div className="mb-3 flex items-center justify-between text-xs text-muted-foreground">
-          <span className="font-mono">{settings.displayMethod === "sequential" ? "وضع متسلسل" : "وضع كامل"}</span>
+          <span className="font-mono">
+            {meta.type === "addition_subtraction"
+              ? `${SOLVING_METHOD_LABELS[solvingMethod]} · `
+              : ""}
+            {settings.displayMethod === "sequential" ? "وضع متسلسل" : "وضع كامل"}
+          </span>
           <span className="font-mono">
             {settings.displayTime}ث عرض · {settings.disappearTime}ث اخفاء
           </span>
@@ -474,6 +512,87 @@ function MathGameInner({
 // Helpers
 // ---------------------------------------------------------------------------
 
+type SolvingMethod = "direct" | "friendsOf5" | "friendsOf10";
+
+const SOLVING_METHOD_LABELS: Record<SolvingMethod, string> = {
+  direct: "مباشرة",
+  friendsOf5: "أصدقاء الخمسة",
+  friendsOf10: "أصدقاء العشرة",
+};
+
+function parseSolvingMethod(v: string | undefined): SolvingMethod {
+  return v === "friendsOf5" || v === "friendsOf10" ? v : "direct";
+}
+
+function randIntLocal(rng: () => number, min: number, max: number): number {
+  return Math.floor(rng() * (max - min + 1)) + min;
+}
+
+/**
+ * أصدقاء الخمسة/العشرة question generator (legacy solvingMethod option,
+ * implemented for real). Terms after the first come in complement pairs
+ * (a, target−a): every two consecutive operands sum exactly to the target
+ * (5 or 10) — the classic mental-math "friends" technique. Each pair shares
+ * one randomly-chosen sign (… + a + (target−a) … or … − a − (target−a) …)
+ * while guarding the running total ≥ 0 and ≤ 10,000,000. A lone trailing
+ * term (odd termsCount) gets a single guarded sign. Deterministic per rng.
+ */
+function generateAddSubFriends(
+  rng: () => number,
+  method: Exclude<SolvingMethod, "direct">,
+  numberLength: number,
+  termsCount: number
+): Question {
+  const target = method === "friendsOf5" ? 5 : 10;
+
+  // Classic two-term drill: either "a + (target−a)" (the friend pair,
+  // e.g. "2 + 3" / "8 + 2") or "target − a" (the answer IS the friend,
+  // e.g. "5 − 2 = 3" / "10 − 7 = 3").
+  if (termsCount <= 2) {
+    const a = randIntLocal(rng, 1, target - 1);
+    const b = target - a;
+    if (rng() > 0.5) {
+      return { text: `${a} + ${b}`, answer: target, terms: [a, "+", b] };
+    }
+    return { text: `${target} - ${a}`, answer: b, terms: [target, "-", a] };
+  }
+
+  const max = Math.pow(10, numberLength);
+
+  let total = randIntLocal(rng, 0, max - 1);
+  const terms: (number | string)[] = [total];
+
+  let remaining = termsCount - 1;
+  while (remaining > 0) {
+    if (remaining >= 2) {
+      const a = randIntLocal(rng, 1, target - 1);
+      const b = target - a; // the friend/complement
+      const negative = rng() > 0.5;
+      if (negative && total - (a + b) >= 0) {
+        terms.push("-", a, "-", b);
+        total -= a + b;
+      } else {
+        terms.push("+", a, "+", b);
+        total += a + b;
+      }
+      remaining -= 2;
+    } else {
+      // Odd tail: a single friend value with a guarded sign.
+      const a = randIntLocal(rng, 1, target - 1);
+      if (rng() > 0.5 && total - a >= 0) {
+        terms.push("-", a);
+        total -= a;
+      } else {
+        terms.push("+", a);
+        total += a;
+      }
+      remaining -= 1;
+    }
+  }
+
+  return { text: terms.join(" "), answer: total, terms };
+}
+
 function clampInt(v: number, min: number, max: number): number {
   if (Number.isNaN(v)) return min;
   return Math.max(min, Math.min(max, Math.round(v)));
@@ -483,10 +602,10 @@ function clampFloat(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
-function summarizeSettings(s: GameSettings): string {
+function summarizeSettings(s: GameSettings, solvingMethod: SolvingMethod = "direct"): string {
   switch (s.type) {
     case "addition_subtraction":
-      return `${s.numberLength} خانة · ${s.termsCount} حدود · ${s.displayMethod === "sequential" ? "متسلسل" : "كامل"}`;
+      return `${s.numberLength} خانة · ${s.termsCount} حدود · ${SOLVING_METHOD_LABELS[solvingMethod]} · ${s.displayMethod === "sequential" ? "متسلسل" : "كامل"}`;
     case "multiplication":
       return `${s.num1Length}×${s.num2Length} خانات · ${s.displayMethod === "sequential" ? "متسلسل" : "كامل"}`;
     case "division":
@@ -499,9 +618,11 @@ function summarizeSettings(s: GameSettings): string {
 function PreGameCard({
   settings,
   meta,
+  solvingMethod,
 }: {
   settings: GameSettings;
   meta: { type: QuestionType; title: string; gradient: string; opColor: string; accentColor: string };
+  solvingMethod: SolvingMethod;
 }) {
   const setView = useUIStore((s) => s.setView);
   return (
@@ -516,7 +637,7 @@ function PreGameCard({
       <div className="mx-auto max-w-xs">
         <Badge variant="secondary" className="glass mb-1 w-full justify-center gap-1.5">
           <Hash className="h-3 w-3 text-primary" />
-          {summarizeSettings(settings)}
+          {summarizeSettings(settings, solvingMethod)}
         </Badge>
       </div>
       <Button variant="ghost" size="sm" className="mt-4" onClick={() => setView("trainings")}>

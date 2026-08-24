@@ -11,7 +11,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { useUIStore, ViewId } from "@/lib/ui-store";
-import { useAuth, AuthProvider } from "@/components/auth-context";
+import { useAuth } from "@/components/auth-context";
 import { LandingView } from "@/components/views/landing-view";
 import { LoginView } from "@/components/views/login-view";
 import { RegisterView } from "@/components/views/register-view";
@@ -125,9 +125,7 @@ function ViewRenderer() {
 }
 
 export function AppShell() {
-  return (
-    <AuthProvider>
-      <ViewRenderer />
-    </AuthProvider>
-  );
+  // NOTE: AuthProvider lives in <Providers /> (root layout) so the
+  // header + sidebar siblings can consume the same auth query.
+  return <ViewRenderer />;
 }

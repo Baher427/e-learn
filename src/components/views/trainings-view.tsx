@@ -33,15 +33,25 @@ import {
   Hash,
   Eye,
   Zap,
+  Brain,
 } from "lucide-react";
 import { toast } from "sonner";
 
 type GameKind = "add-sub" | "mult" | "div" | "abacus";
 
+type SolvingMethod = "direct" | "friendsOf5" | "friendsOf10";
+
+const GAME_KINDS: readonly GameKind[] = ["add-sub", "mult", "div", "abacus"];
+
+function isGameKind(v: string | undefined): v is GameKind {
+  return !!v && (GAME_KINDS as readonly string[]).includes(v);
+}
+
 interface SetupConfig {
   // add/sub
   numberLength?: number; // 1..4
   termsCount?: number; // 2..20
+  solvingMethod?: SolvingMethod; // direct | friendsOf5 | friendsOf10
   // mult
   num1Length?: number; // 1..4
   num2Length?: number; // 1..3
@@ -101,11 +111,24 @@ const GAME_CARDS: Array<{
 
 export function TrainingsView() {
   const setView = useUIStore((s) => s.setView);
+  const params = useUIStore((s) => s.params);
   const [selected, setSelected] = useState<GameKind | null>(null);
+
+  // "Adjust state during render" pattern (per React docs) — when the
+  // dashboard navigates here via setView("trainings", { game: "…" }),
+  // pre-select that game so its setup dialog opens automatically.
+  // (Avoids setState-in-effect; the lastPreselect guard makes it run once.)
+  const [lastPreselect, setLastPreselect] = useState<GameKind | null>(null);
+  const preselectKey = isGameKind(params.game) ? params.game : null;
+  if (preselectKey && preselectKey !== lastPreselect) {
+    setLastPreselect(preselectKey);
+    setSelected(preselectKey);
+  }
 
   const [cfg, setCfg] = useState<SetupConfig>({
     numberLength: 1,
     termsCount: 2,
+    solvingMethod: "direct",
     num1Length: 2,
     num2Length: 1,
     dividendLength: 3,
@@ -235,6 +258,17 @@ function SetupDialog({ selected, cfg, setCfg, onClose, onStart }: SetupDialogPro
                 max={20}
                 step={1}
                 onChange={(v) => setCfg((p) => ({ ...p, termsCount: v }))}
+              />
+              <SelectField
+                label="طريقة الحل"
+                icon={<Brain className="h-3.5 w-3.5" />}
+                value={cfg.solvingMethod ?? "direct"}
+                onChange={(v) => setCfg((p) => ({ ...p, solvingMethod: v as SolvingMethod }))}
+                options={[
+                  { value: "direct", label: "مباشرة — أرقام عشوائية" },
+                  { value: "friendsOf5", label: "أصدقاء الخمسة (1+4، 2+3)" },
+                  { value: "friendsOf10", label: "أصدقاء العشرة (1+9، 2+8…)" },
+                ]}
               />
             </>
           )}

@@ -30,6 +30,7 @@ export interface GameSettings {
   displayTime?: number // seconds
   disappearTime?: number // seconds
   displayMethod?: 'sequential' | 'full'
+  solvingMethod?: 'direct' | 'friendsOf5' | 'friendsOf10'
   questionCount?: number
   seed?: string
 }
@@ -49,6 +50,68 @@ function randInt(rng: () => number, min: number, max: number): number {
 // --------------------------------------------------------------------
 // Generators
 // --------------------------------------------------------------------
+
+/**
+ * أصدقاء الخمسة / أصدقاء العشرة — complement-pair generation.
+ * Terms after the first come in pairs (a, target−a) that sum exactly
+ * to 5 or 10, sharing one sign per pair, with the running total
+ * guarded to [0, 10_000_000]. Mirrors the client-side generator in
+ * game-view.tsx exactly (same seeded RNG derivation) so the server
+ * can re-derive correctness for friends-mode attempts.
+ */
+export function generateAddSubFriends(
+  rng: () => number,
+  method: 'friendsOf5' | 'friendsOf10',
+  numberLength = 1,
+  termsCount = 2
+): Question {
+  const target = method === 'friendsOf5' ? 5 : 10
+
+  // Classic two-term drill: either "a + (target−a)" (the friend pair,
+  // e.g. "2 + 3") or "target − a" where the answer IS the friend.
+  if (termsCount <= 2) {
+    const a = randInt(rng, 1, target - 1)
+    const b = target - a
+    if (rng() > 0.5) {
+      return { text: `${a} + ${b}`, answer: target, terms: [a, '+', b] }
+    }
+    return { text: `${target} - ${a}`, answer: b, terms: [target, '-', a] }
+  }
+
+  const max = Math.pow(10, numberLength)
+  let total = randInt(rng, 0, max - 1)
+  const terms: (number | string)[] = [total]
+
+  let remaining = termsCount - 1
+  while (remaining > 0) {
+    if (remaining >= 2) {
+      const a = randInt(rng, 1, target - 1)
+      const b = target - a // the friend/complement
+      const negative = rng() > 0.5
+      if (negative && total - (a + b) >= 0) {
+        terms.push('-', a, '-', b)
+        total -= a + b
+      } else {
+        terms.push('+', a, '+', b)
+        total += a + b
+      }
+      remaining -= 2
+    } else {
+      // Odd tail: a single friend value with a guarded sign.
+      const a = randInt(rng, 1, target - 1)
+      if (rng() > 0.5 && total - a >= 0) {
+        terms.push('-', a)
+        total -= a
+      } else {
+        terms.push('+', a)
+        total += a
+      }
+      remaining -= 1
+    }
+  }
+
+  return { text: terms.join(' '), answer: total, terms }
+}
 
 export function generateAddSub(
   rng: () => number,
@@ -126,6 +189,17 @@ export function generateQuestion(
   const rng = makeRng(seed)
   switch (settings.type) {
     case 'addition_subtraction':
+      if (
+        settings.solvingMethod === 'friendsOf5' ||
+        settings.solvingMethod === 'friendsOf10'
+      ) {
+        return generateAddSubFriends(
+          rng,
+          settings.solvingMethod,
+          settings.numberLength ?? 1,
+          settings.termsCount ?? 2
+        )
+      }
       return generateAddSub(rng, settings.numberLength ?? 1, settings.termsCount ?? 2)
     case 'multiplication':
       return generateMultiplication(rng, settings.num1Length ?? 2, settings.num2Length ?? 1)
@@ -227,6 +301,7 @@ export const addSubSettingsSchema = z.object({
   displayTime: z.number().min(0.1).max(10),
   disappearTime: z.number().min(0.1).max(10),
   displayMethod: z.enum(['sequential', 'full']),
+  solvingMethod: z.enum(['direct', 'friendsOf5', 'friendsOf10']).optional(),
 })
 
 export const multSettingsSchema = z.object({

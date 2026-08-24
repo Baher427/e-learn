@@ -38,7 +38,11 @@ export type ViewId =
 interface GameState {
   view: ViewId;
   params: Record<string, string>;
+  /** Legacy-style user info drawer (opens from the left edge). */
+  sidebarOpen: boolean;
   setView: (view: ViewId, params?: Record<string, string>) => void;
+  setSidebarOpen: (open: boolean) => void;
+  toggleSidebar: () => void;
   reset: () => void;
 }
 
@@ -47,8 +51,11 @@ export const useUIStore = create<GameState>()(
     (set) => ({
       view: "landing",
       params: {},
+      sidebarOpen: false,
       setView: (view, params = {}) => set({ view, params }),
-      reset: () => set({ view: "landing", params: {} }),
+      setSidebarOpen: (open) => set({ sidebarOpen: open }),
+      toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+      reset: () => set({ view: "landing", params: {}, sidebarOpen: false }),
     }),
     {
       name: "elearn-ui",

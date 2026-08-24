@@ -71,6 +71,7 @@ model User {
   currentStatus String   @default("idle") // "idle" | "playing"
   lastActivity  DateTime @default(now())
   aiAttemptsCount Int    @default(0)
+  deviceToken    String?  // hash of IP+UA — device-conflict detection (تأمين الحساب)
   aiLastDate    DateTime?
   lastDailyBonus DateTime?
   createdAt     DateTime @default(now())

@@ -2840,3 +2840,166 @@ Stage Summary:
 - ✅ التعديل مرفوع على GitHub (`8c04133`) ومنشور على Vercel تلقائياً.
 - ✅ regression: الـ admin login وstudent login لسه شغّالين بدون أي تغيير في السلوك.
 - 🔑 للمستخدم: عشان يجرّب على الموقع الحي بنفسه، محتاج يفعّل إرسال OTP الحقيقي عبر Resend (مجاني من resend.com) ويضيف `RESEND_API_KEY` كـ env var على Vercel. بدون Resend، OTP بيتطبع بس في function logs على Vercel (مش سهل الوصول). محلياً يظهر في dev.log بسهولة.
+
+---
+Task ID: 15
+Agent: main (Z.ai Code)
+Task: استعادة ستايل الموقع القديم بالكامل + المميزات المفقودة — "نسخة في الاستيل من اللي بعته مع تحسين".
+
+Work Log (planning):
+- قارنت كل ملفات PHP القديمة (17,500 سطر) مع النسخة الحالية (10,582 سطر).
+- النتيجة: المنطق الخلفي (APIs) شبه كامل، لكن الشكل/التجربة مختلفان جذرياً عن القديم.
+- الفجوات المكتشفة:
+  1. الهيدر القديم (أفاتار+اسم+مستوى + جرس إشعارات بنقطة + همبرغر) والسايدبار الجانبي (بيانات الطالب: المدرّب/المستوى/نهاية الاشتراك/الهاتف/خروج) — غير موجودين نهائياً.
+  2. داشبورد الطالب: بانر الترحيب "أهلاً يا بطل! 👋" بتدرج indigo→violet + 5 كروت تدريب (جمع/طرح أزرق، ضرب زمردي، قسمة سماوي، أباكوس تركوازي، إحصائياتي برتقالي) + كارتا التحدي بتوهج orange/purple — غير موجودة بالشكل القديم.
+  3. صفحة الهبوط: كارت زجاجي واحد بشريط تدرج علوي indigo→purple→pink + شعار مخ مضيء + كتابة كلمة-بكلمة + 3 كروت مميزات بعناوين ملونة + كارت الدعم — غير موجودة.
+  4. تأمين الحساب في الدخول (device conflict + OTP force logout) — مفقود تماماً.
+  5. خيار طريقة الحل (مباشر/أصدقاء الخمسة/أصدقاء العشرة) في إعدادات الجمع والطرح — مفقود.
+  6. تنبيه انتهاء الاشتراك (<24 ساعة، مرة واحدة/جلسة) — مفقود.
+- الخطة:
+  - Task 15-a (أنا): إضافة deviceToken للمخطط + منطق force-logout في login API + دعم username في otp route + بناء AppHeader/AppSidebar وربطهم في page.tsx.
+  - Task 15-b (وكيل): إعادة بناء dashboard-view بالستايل القديم.
+  - Task 15-c (وكيل): إعادة بناء landing-view بالستايل القديم.
+  - Task 15-d (وكيل): إعادة بناء login-view + مودال تأمين الحساب.
+  - Task 15-e (وكيل): إضافة solvingMethod + تحسينات trainings/game.
+
+---
+Task ID: 15-e
+Agent: Trainings Enhancer
+Task: إضافة solvingMethod + preselect من الداشبورد
+
+Work Log:
+- قرأت worklog.md (Task 15 التخطيط) + `src/lib/ui-store.ts` + `src/components/views/trainings-view.tsx` + `src/components/views/game-view.tsx` + `src/lib/game.ts` + `src/components/game/question-display.tsx` + `src/app/api/training/save/route.ts` لفهم البنية قبل التعديل.
+- تأكدت أن الداشبورد الجديد (Task 15-b) فعلاً ينادي `setView("trainings", { game: "add-sub" | "mult" | "div" | "abacus" })` وأن العقد (contract) يطابق ما سأنفذه.
+
+TASK A — preselect من الداشبورد (trainings-view.tsx):
+- أضفت `const params = useUIStore((s) => s.params);` في TrainingsView.
+- نفّذت نمط "adjust state during render" (الموثّق في React docs، ومستخدم مسبقاً في PricingForm بـ admin-withdrawals-view) بدل `useEffect+setState` لتجنب قاعدة `react-hooks/set-state-in-effect`:
+  ```tsx
+  const [lastPreselect, setLastPreselect] = useState<GameKind | null>(null);
+  const preselectKey = isGameKind(params.game) ? params.game : null;
+  if (preselectKey && preselectKey !== lastPreselect) {
+    setLastPreselect(preselectKey);
+    setSelected(preselectKey);
+  }
+  ```
+- أضفت type guard `isGameKind()` (تحقق صارم من "add-sub"|"mult"|"div"|"abacus" فقط، أي قيمة غير معروفة تُتجاهل بأمان). حارس lastPreselect يمنع إعادة الفتح المتكررة، وإلغاء الـ mount يعيد ضبطه تلقائياً فيشتغل مرة واحدة لكل تنقّل.
+- التحقق: النقر على كرت في الداشبورد الجديد يفتح نافذة الإعداد الخاصة باللعبة فوراً؛ العودة العادية لـ trainings (بدون params) لا تفتح شيئاً.
+
+TASK B — طريقة الحل solvingMethod:
+- trainings-view.tsx: أضفت `type SolvingMethod = "direct" | "friendsOf5" | "friendsOf10"` + حقل `solvingMethod?: SolvingMethod` في SetupConfig + قيمة افتراضية `solvingMethod: "direct"`.
+- أضفت في SetupDialog (لعبة الجمع والطرح فقط، بعد "عدد الحدود") SelectField بعنوان "طريقة الحل" وأيقونة Brain بالخيارات:
+  - "مباشرة — أرقام عشوائية" / "أصدقاء الخمسة (1+4، 2+3)" / "أصدقاء العشرة (1+9، 2+8…)" (مطابقة للراديو في addition_subtraction_setup.php القديم).
+- القيمة تتدفق تلقائياً إلى params عبر `Object.fromEntries(Object.entries(cfg)…)` الموجود في startGame() دون أي تغيير إضافي.
+- game-view.tsx: أضفت `solvingMethod` منفصلاً عن GameSettings (parsed من params.solvingMethod عبر `parseSolvingMethod` مع رفض آمن لأي قيمة غير معروفة → "direct").
+- نفّذت `generateAddSubFriends()` محلياً في game-view.tsx (lib/game.ts خارج ملكيتي):
+  - friendsOf5/friendsOf10: بعد الحد الأول (عشوائي حسب عدد الخانات) تأتي الحدود في أزواج متمّمة (a, target−a) — كل زوجين متتاليين مجموعهما 5 أو 10 بالضبط. كل زوج يأخذ إشارة واحدة عشوائية (+a +(target−a) أو −a −(target−a)) مع حراسة المجموع الجاري ≥ 0 و ≤ 10,000,000. الذيل الفردي (termsCount زوجي) يأخذ قيمة صديق مفردة بإشارة محروسة.
+  - termsCount = 2 (الافتراضي): التمرين الكلاسيكي الصافي — إما "a + (target−a)" (مثال "2 + 3" = 5، "8 + 2" = 10) أو "target − a" حيث الإجابة هي الصديق نفسه ("5 − 2" = 3، "10 − 7" = 3).
+  - الـ RNG: نفس seedrandom المُصدَّر من lib/game (`makeRng`) بنفس صيغة الاشتقاق `${seed}-addition_subtraction-${index}` — حتمية كاملة لكل (seed, index)، والوضع المباشر direct لم يُمَس إطلاقاً (نفس generateQuestion السابق).
+- عرض اسم الطريقة بالعربية: أضفته لـ `summarizeSettings` ("مباشرة" / "أصدقاء الخمسة" / "أصدقاء العشرة") فيظهر في: بطاقة ما قبل العد التنازلي (PreGameCard)، ملخص الإعدادات في ResultsModal (نافذة النتائج/PDF)، وسطر الإعدادات أعلى بطاقة السؤال أثناء اللعب.
+- الحفظ: POST /api/training/save يرسل `settings: {...settings, solvingMethod}` للجمع والطرح فقط — يتدفق للـ API دون تغيير في العقد.
+- question-display.tsx: لم يحتج أي تعديل — أسئلة الأصدقاء لها نفس بنية terms (أرقام و"+" و"-") فتُعرض في الوضعين المتسلسل والكامل كما هي.
+- اختبارات مكتوبة وشغّلتها بـ bun (2,400+ حالة عبر seeds×numberLength×termsCount×indices): كل زوجين متتاليين مجموعهما 5/10 بالضبط ✓، إعادة حساب الإجابة من النص يطابق answer ✓، المجموع الجاري لا يصبح سالباً ولا يتجاوز 10M ✓، عدد الحدود مطابق ✓، حتمية seed ✓ — ALL TESTS PASSED.
+- تحقق نهائي: `bunx eslint src/components/views/trainings-view.tsx src/components/views/game-view.tsx` → 0 أخطاء، و `bunx tsc --noEmit` → صفر أخطاء في ملفاتي (الأخطاء الظاهرة كلها pre-existing في ملفات أخرى خارج ملكيتي).
+
+Stage Summary:
+- ✅ (A) التنقّل من الداشبورد إلى منطقة التدريب يفتح نافذة إعداد اللعبة المطلوبة تلقائياً (params.game) بنمط adjust-state-during-render المتوافق مع قواعد الـ lint، مع حماية من القيم غير المعروفة ومن إعادة الفتح المتكررة.
+- ✅ (B) خيار "طريقة الحل" الثلاثة (مباشرة/أصدقاء الخمسة/أصدقاء العشرة) موجود في إعداد الجمع والطرح، مُنفَّذ فعلياً في توليد الأسئلة (الـ legacy كان flag ميتاً)، حتمي بالكامل عبر seedrandom بنفس صيغة seed القائمة، والوضع المباشر كما كان 100%.
+- ✅ اسم الطريقة يظهر بالعربية في كل ملخصات الإعدادات (قبل اللعب/أثناء اللعب/نافذة النتائج) وتُرفع مع settings عند الحفظ.
+- ✅ ESLint: 0 errors · TypeScript strict: 0 errors في الملفين المعدّلين فقط (trainings-view.tsx + game-view.tsx) — لم يُمَس أي ملف آخر.
+- ⚠️ ملاحظة معمارية للوكيل الرئيسي (خارج ملكيتي): `/api/training/save` يعيد اشتقاق الأسئلة سيرفر-سايد عبر `scoreAttempt` في `src/lib/game.ts` بوضع direct فقط، و `addSubSettingsSchema` (zod) يحذف مفتاح solvingMethod الغريب. النتيجة: أسئلة وضع الأصدقاء تُصحَّح سيرفر-سايد كأنها direct (قد تُحتسب خاطئة → 0 نقطة) رغم أن النتائج على الشاشة صحيحة. الإصلاح المطلوب لاحقاً (سطرين تقريباً): إضافة `solvingMethod: z.enum(['direct','friendsOf5','friendsOf10']).optional()` للـ schema + نقل منطق generateAddSubFriends إلى lib/game.ts واستخدامه في generateAddSub — عندها يصبح التصحيح سيرفر-سايد متطابقاً بلا أي تغيير في الواجهة (العميل يرسل solvingMethod مع settings بالفعل).
+
+---
+Task ID: 15-c
+Agent: Landing Legacy Rebuilder
+Task: إعادة بناء landing-view بالستايل القديم (كارت زجاجي واحد متمركز + كتابة كلمة-بكلمة)
+
+Work Log:
+- قرأت worklog.md (سياق Task 15) + ملف index.php القديم كاملاً (370 سطر) لاستخراج الستايل الأصلي بدقة: الكارت الزجاجي الواحد max-w-4xl، شريط التدرج العلوي indigo→purple→pink، الشعار المخ المضيء بـ animate-pulse + blur glow، الكتابة كلمة-بكلمة كل 90ms، أزرار btn-glow-primary/secondary، كروت المميزات بعناوين ملونة، وكارت الدعم بالهاتف.
+- فحصت نظام التصميم الحالي (globals.css): .glass في @layer components، gradient-primary، متغيرات الوضع الفاتح/الداكن، و button.tsx (shadcn مع twMerge) لأختار تركيبة classes لا تتعارض مع الـ cascade.
+- أعدت كتابة src/components/views/landing-view.tsx بالكامل:
+  - حاوية `mx-auto flex w-full max-w-4xl items-center px-4 py-8 sm:py-12` + `md:min-h-[calc(100svh-9rem)]` لمحاكاة التوسيط العمودي القديم (my-auto في body flex) على الشاشات الكبيرة فقط.
+  - كارت واحد `glass rounded-3xl p-6 sm:p-8 md:p-10 relative overflow-hidden` بشريط علوي متدرج مطابق للقديم.
+  - الشعار: بنية القديم حرفياً (glow blur-[20px] opacity-20→40 على hover + مربع slate-800→900 بحد white/10 + animate-pulse + 🧠 drop-shadow-lg).
+  - العنوان: "منصة e-learn" بتدرج from-indigo-400 to-purple-400 + السطر الفرعي "للحساب الذهني وتطوير القدرات" text-muted-foreground — يظهر بأنيميشن 700ms مثل القديم.
+  - الكتابة كلمة-بكلمة عبر framer-motion (بدون أي state/useEffect — لا hydration mismatch ولا set-state-in-effect): كل كلمة motion.span بـ initial opacity-0/y-10 و delay = 0.5 + i×0.09 (90ms مثل القديم تماماً) و ml-[0.3em] inline-block.
+  - الأزرار تظهر بعد اكتمال الكتابة (delay = 0.5 + 21×0.09 + 0.2) ثم المميزات (+150ms) ثم الفوتر (+150ms) — نفس تسلسل showRestOfPage القديم.
+  - زر أساسي: gradient-primary + text-white + shadow-lg + hover:-translate-y-0.5 + hover:shadow-[0_8px_20px_-5px_rgba(79,70,229,0.5)] (نقل btn-glow-primary). زر ثانوي: variant ghost + glass + حد glass-border + hover:border-indigo-500 + hover:bg-white/10 + lift (نقل btn-glow-secondary). للزائر زرّان (🚀 تسجيل الدخول / ✨ حساب جديد)، وللمسجَّل زر واحد (🚀 ابدأ التحدّي الآن → dashboard للطالب / admin-users للمدير).
+  - 6 كروت مميزات في grid-cols-1 md:grid-cols-3 بفاصل border-t: الثلاثة القديمة (🏆 منافسات وتحديات indigo-500، 📈 مناهج متطورة purple-500، 🤖 تحدي الروبوت pink-500) + 3 جديدة (🛡️ بياناتك في أمان emerald-500 مع bcrypt/JWT، 🧮 أربعة أنواع تدريب cyan-500، 👥 مجتمع وتعلّم جماعي amber-500)، كل كارت glass p-4 rounded-xl مع hover:-translate-y-1 hover:bg-white/10 (نقل feature-card).
+  - فوتر الدعم مطابق للقديم: تدرج from-indigo-500/10 to-purple-500/10 + border-indigo-500/20 + عنوان indigo-400 صغير uppercase + رابط tel:0122147212 بخط font-mono عريض + scale-105 على hover + سطر حقوق `© {YEAR} e-learn. جميع الحقوق محفوظة.` (YEAR ثابت على مستوى الموديول لتفادي hydration mismatch).
+- التحقق: `bunx eslint src/components/views/landing-view.tsx` → 0 أخطاء. `bunx tsc --noEmit` → لا أخطاء في ملفي (الأخطاء الظاهرة كلها pre-existing في ملفات أخرى خارج نطاقي).
+- التحقق الحي (dev server + agent-browser بجلسة معزولة حتى لا أتعارض مع الوكلاء الآخرين):
+  - الصفحة ترسم الكارت الواحد (عرض 864px على viewport 1280 = max-w-4xl مطابق) مع الشريط العلوي والشعار النابض.
+  - الكتابة كلمة-بكلمة تعمل: 1/21 كلمة ظاهرة عند 0.9 ثانية → 21/21 عند 3.4 ثانية.
+  - زر "تسجيل الدخول" ينتقل لصفحة الدخول ✓ وزر "حساب جديد" ينتقل لصفحة التسجيل ✓.
+  - لا page errors ولا console errors.
+  - موبايل 375px: الزرّان full-width متراصّان عمودياً، لا horizontal overflow.
+  - فحص بصري عبر VLM للقطات (viewport + full-page): كارت واحد متمركز، الشريط العلوي، الزران، شبكة 6 كروت، كارت الدعم بالهاتف، سطر الحقوق، بدون أي تداخل أو كسر.
+
+Stage Summary:
+- landing-view أصبح نسخة طبق الأصل من index.php القديم مع تحسينات: كارت زجاجي واحد متمركز بشريط تدرج علوي، شعار مخ نابض بتوهج، عنوان متدرج، الكتابة كلمة-بكلمة (90ms/كلمة عبر framer-motion بدون state)، أزرار glow بنفس تفاعلات القديم (lift + glow indigo)، 6 كروت مميزات (3 القديمة بالألوان الأصلية + 3 جديدة)، وكارت الدعم الفني بالهاتف والحقوق.
+- الاختلافات عن النسخة السابقة: أُزيلت أقسام STATS و"لماذا e-learn" وCTA السفلية متعددة الأقسام (كانت هي سبب شكوى المستخدم أن الشكل لا يشبه القديم) — كل شيء الآن داخل كارت واحد.
+- lint نظيف (0 أخطاء)، لا أخطاء TypeScript في الملف، لا أخطاء runtime/hydration، الأزرار موصولة بنظام الـ views (setView) كما هو، والاسم المُصدَّر LandingView لم يتغير فلا تعديلات مطلوبة في app-shell.
+- لم يُلمس أي ملف غير src/components/views/landing-view.tsx.
+
+---
+Task ID: 15-b
+Agent: Dashboard Legacy Rebuilder
+Task: إعادة بناء dashboard-view بالستايل القديم
+
+Work Log:
+- قرأت worklog.md (سياق Task 15) + dashboard-view.tsx الحالي + الملفات المرجعية: ui-store.ts (توقيع setView مع params)، auth-context.tsx (حقول AuthUser)، hooks/use-is-mounted.ts (useSyncExternalStore — false على السيرفر ثم true بدون setState في effect)، ui/alert-dialog.tsx، ui/badge.tsx، globals.css (فئات glass/glass-strong/gradient-primary/gradient-text موجودة، ولا توجد glass-panel فاستخدمت glass).
+- قرأت dashboard.php القديم كاملاً (582 سطراً) لأخذ البنية حرفياً: بانر الترحيب، منطقة التدريب (5 كروت بألوان blue/emerald/cyan/teal/orange)، كارتا التحدي بتوهج orange/purple، ومنطق SweetAlert لتنبيه انتهاء الاشتراك (<=24 ساعة، مرة واحدة بالجلسة).
+- أعدت كتابة src/components/views/dashboard-view.tsx بالكامل:
+  1) بانر hero بتدرج from-indigo-600 to-violet-600 + rounded-3xl + دائرتا blur (white/10 وblack/10) + عنوان "أهلاً يا بطل! 👋" + زر "الساحة" الزجاجي (bg-white/20) مع سهم يسار ← setView("pvp").
+  2) شريط إحصائيات مصغّر (تحسين): 3 Badge زجاجية بأرقام font-mono — نقاط التدريب (Award/primary)، نقاط PVP (Trophy/orange)، أيام متبقية (Clock/emerald، تظهر فقط لو validityEnd موجود).
+  3) قسم "منطقة التدريب" بعنوان بأيقونة Dumbbell داخل chip أزرق + grid-cols-2 md:grid-cols-4 lg:grid-cols-5 — 5 كروت h-32: الجمع والطرح (Plus/blue)، لعبة الضرب (X/emerald)، القسمة (Divide/cyan)، عداد الأباكس (Calculator/teal)، إحصائياتي (PieChart/orange) — كل كارت بشريحة أيقونة أعلى اليمين bg-{color}-500/10 تتحول للون الممتلئ عند hover مع hover:-translate-y-1 وhover:border-{color}-500/50.
+  4) قسم التحديات: كارتا ساحة المعركة (Trophy، توهج shadow-[0_0_20px_rgba(249,115,22,0.25)] → hover 40px + blur دائرة برتقالية) والاختبارات (FileSignature، نفس البنية ببنفسجي rgba(168,85,247,...)) مع دائرة سهم يمين تتحول للون الكارت عند hover.
+  5) تنبيه انتهاء الاشتراك (بديل SweetAlert): AlertDialog من shadcn بأيقونة TriangleAlert كهرمانية + "تنبيه هام" + "صلاحية اشتراكك قاربت على الانتهاء. يرجى مراجعة المدرب." + زر "حسناً" — بدون أي useEffect/setState: showExpiryWarning = mounted && !expiryDismissed && needsExpiryWarning && !wasExpiryWarningShown() (قراءة sessionStorage نقية أثناء الرندر خلف بوابة useIsMounted لتفادي hydration mismatch، وتفادي قاعدة react-hooks/set-state-in-effect). عند الإغلاق: setExpiryDismissed(true) + sessionStorage.setItem('expiry_warning_shown','1').
+  6) الربط: كروت التدريب → setView("trainings", { game: "add-sub" | "mult" | "div" | "abacus" })، إحصائياتي → "statistics"، الساحة وساحة المعركة → "pvp"، الاختبارات → "exam-generator".
+  7) حافظت حرفياً على: if (!user) return null + بطاقتي pending ("حسابك قيد المراجعة") وexpired ("انتهت صلاحية حسابك") بنفس تنسيقهما + const { user, logout, unreadNotifications } = useAuth().
+  8) حركات دخول framer-motion متدرجة (staggered) عبر motion.div غلاف حول كل كارت حتى لا تتعارض أنيميشن framer مع CSS transition للـ hover.
+- فحوصات: bunx eslint src/components/views/dashboard-view.tsx → 0 أخطاء؛ tsc --noEmit → لا أخطاء للملف.
+- تحقق بصري حي عبر agent-browser على السيرفر المحلي (مع mock لمسار /api/auth/me بمستخدم approved لأن سيرفر الوكيل الآخر كان ببيئة ناقصة): البانر والشريط والكروت الخمسة وكارتا التوهج تظهر صحيحة، لا overflow أفقي على 1440px ولا 375px، لا page errors ولا console errors.
+- اختبارات سلوكية: ضغط "الجمع والطرح" → view=trainings + params.game="add-sub" (وديالوج الإعداد فتح تلقائياً)، "عداد الأباكس" → game="abacus"، "إحصائياتي" → statistics، "ساحة المعركة" و"الساحة" → pvp، "الاختبارات" → exam-generator.
+- اختبار التنبيه: mock بصلاحية بعد 12 ساعة → ظهر AlertDialog "تنبيه هام"، ضغط "حسناً" → اختفى + sessionStorage flag=1، وإعادة التحميل → لم يظهر مرة أخرى. لقطات موثقة: /tmp/dash15b-desktop.png و/tmp/dash15b-mobile.png و/tmp/dash15b-expiry.png.
+
+Stage Summary:
+- ✅ الداشبورد أصبح نسخة طبق الأصل من dashboard.php القديم: بانر indigo→violet بعبارة "أهلاً يا بطل! 👋"، 5 كروت تدريب بألوانها (أزرق/زمردي/سماوي/تركوازي/برتقالي) بشريحة أيقونة تمتلئ عند الـ hover، وكارتا التحدي بتوهج برتقالي وبنفسجي مع سهم دائري.
+- ✅ تحسينان فوق القديم: شريط إحصائيات زجاجي مصغّر (نقاط تدريب/PVP/أيام متبقية بأرقام Chakra Petch) وتنبيه قرب انتهاء الصلاحية AlertDialog حديث بدل SweetAlert (مرة واحدة/جلسة عبر sessionStorage) بدون خرق قواعد React hooks.
+- ✅ كل أزرار التنقل مربوطة: التدريبات تستدعي view "trainings" مع params.game (add-sub/mult/div/abacus) جاهزة ليقرأها وكيل 15-e، والإحصائيات/PVP/الاختبارات تعمل ومُختبرة فعلياً.
+- ✅ السلوكيات المحفوظة: حارس !user، بطاقتا pending/expired بنفس الشكل، وdestructuring useAuth الكامل.
+- ✅ ESLint وtsc نظيفان، والاختبار البصري والسلوكي على المتصفح نجح بدون أي أخطاء كونسول.
+
+---
+Task ID: 15-d
+Agent: Login Security Rebuilder
+Task: إعادة بناء login-view + مودال تأمين الحساب (force logout OTP)
+
+Work Log:
+- قرأت الـ worklog (خاصة Task 14/15) + legacy `login.php` (438 سطر) + `auth-context.tsx` + `register-view.tsx` (نمط InputOTP) + `ui/dialog.tsx` + `ui/input-otp.tsx` + `globals.css` (نظام glass/gradient-primary).
+- أعدت بناء `src/components/views/login-view.tsx` بالكامل (الملف الوحيد المعدَّل):
+  - ستايل legacy: دائرة 🧠 نابضة (rounded-full bg-indigo-500/10 border-indigo-500/20 animate-pulse p-4، text-4xl)، H1 "بوابة العباقرة" text-3xl font-bold، subtitle "سجل دخولك واستعد للتحدي!"، كارت glass rounded-2xl p-6/8، ليبلات font-bold، حقول glass-input h-12 rounded-xl px-4، زر "🚀 انطلق للساحة" gradient-primary py-3.5 مع hover:-translate-y-0.5، بانر خطأ inline (⚠️ bg-red-500/10 border-red-500/20 text-red-400 rounded-xl) بجانب الـ toasts، فوتر "ليس لديك حساب؟ أنشئ حساباً جديداً" + "العودة للرئيسية".
+  - استبدلت `login()` من الـ context بـ fetch مباشر لـ `/api/auth/login` عشان أقدر أقرأ حقل `code:"device_conflict"` (الـ context بيرمي Error ويبلعه). بعد أي دخول ناجح: `await refresh()` (invalidate لـ ["auth","me"]) قبل `setView("dashboard")` — نفس إصلاح Task 14.
+  - مودال "تأمين الحساب" (Dialog + DialogContent rounded-3xl مع دائرة blur زرقاء أعلى الزاوية + 📧🔒 + عنوان text-indigo-400):
+    - خطوة send: نص التعارض + زر "📩 إرسال الكود للإيميل" (bg-gradient-to-l from-blue-600 to-blue-500) + زر "إلغاء".
+    - خطوة verify: "تم الإرسال. أدخل الكود هنا:" + InputOTP بـ 6 خانات (dir="ltr"، بحجم أكبر h-12 w-10 text-xl) + زر "🔓 تأكيد ودخول" gradient-primary + لينك "لم يصل الكود؟ حاول مرة أخرى".
+    - sendOtp: POST /api/auth/otp {username, purpose:"login_force"} → toast بالإيميل المموّه + الانتقال للخطوة 2.
+    - verifyOtp: POST /api/auth/login {username, password, forceLogout:true, otpCode} → نجاح: toast + await refresh() + dashboard + إغلاق المودال؛ فشل 401: toast بالم رسالة الخادم والمودال يفضل مفتوح لإعادة المحاولة.
+    - الإلغاء/Esc/الإغلاق بيعيد الضبط للخطوة "send" وبيمسح الكود.
+- تحقق كامل عبر agent-browser (جلسة معزولة + fetch mock مطابق للعقد):
+  - 401 بيانات خاطئة → بانر inline + toast ✓
+  - 409 device_conflict → فتح المودال بالخطوة 1 ✓
+  - إرسال الكود → toast بالإيميل المموّه + خطوة 2 بـ 6 خانات OTP ✓
+  - OTP خاطئ (401) → toast "رمز التحقق خاطئ أو منتهي الصلاحية!" + المودال مفتوح ✓
+  - "حاول مرة أخرى" → رجوع للخطوة 1 ✓ / "إلغاء" وEsc → إغلاق + تصفير ✓
+  - OTP صحيح → toast نجاح + refresh + الانتقال للـ dashboard ("أهلاً يا بطل!") وإغلاق المودال ✓
+  - لينكات التسجيل/الرئيسية شغالة، ولا page errors ولا console errors ✓
+  - لقطات: /tmp/login15-conflict-step1.png، /tmp/login15-conflict-step2-otp.png، /tmp/login15-dashboard-after-otp.png، /tmp/login-legacy-style.png
+- `bunx eslint src/components/views/login-view.tsx` → 0 أخطاء ✓ و`bunx tsc --noEmit` → لا أخطاء في الملف ✓
+- ملاحظة: سيرفر dev اشتغل على :3000 أثناء الاختبار واتركه شغال (بيتشارك مع باقي الوكلاء). مسارات الـ API الجديدة (device_conflict 409 / otp بـ username+login_force / forceLogout+otpCode) لسه مش موجودة في الريبو وقت الاختبار (الوكيل الرئيسي بينفذها بالتوازي) — فالواجهة اتجربت ضد العقد عبر mock.
+
+Stage Summary:
+- ✅ login-view رجعت بالشكل القديم بالكامل (بوابة العباقرة) مع الحفاظ على useAuth/useUIStore وframer-motion.
+- ✅ تدفق "تأمين الحساب" (force logout OTP) مبني ومجرّب بالكامل ضد عقد الـ API — جاهز يشتغل أول ما الـ backend ينزل.
+- 🔑 الوكيل الرئيسي لازم يكمل: 409 device_conflict في login route، دعم username+purpose:"login_force" في otp route، وقبول forceLogout+otpCode في login route (عقد موثّق في أعلى Task 15-d).
