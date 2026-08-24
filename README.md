@@ -2,7 +2,9 @@
 
 > منصة عربية متكاملة لتدريب الأطفال على الحساب الذهني، المسابقات الحية، تحديات الذكاء الاصطناعي، ومولّد الامتحانات — مُعاد بناؤها من مشروع PHP قديم (~17,500 سطر) إلى نسخة حديثة بـ **Next.js 16 + Supabase Postgres + Vercel**.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/Baher427/e-learn&project-name=e-learn&repository-name=e-learn)
+
+> 📖 **دليل النشر الكامل**: راجع [`DEPLOYMENT.md`](./DEPLOYMENT.md) لخطوات Vercel + Supabase بالتفصيل ومفاتيح البيانات المطلوبة.
 
 ---
 
