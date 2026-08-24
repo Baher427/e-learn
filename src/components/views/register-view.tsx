@@ -67,7 +67,17 @@ export function RegisterView() {
         body: JSON.stringify({ email: form.email, purpose: "register" }),
       });
       const j = await res.json();
-      if (j.status === "success") { setOtpSent(true); toast.success(`تم إرسال الرمز إلى ${j.data.maskedEmail}`); }
+      if (j.status === "success") {
+        setOtpSent(true);
+        toast.success(`تم إرسال الرمز إلى ${j.data.maskedEmail}`);
+        // Dev/no-email setups: API returns the code inline (devCode) so
+        // registration stays testable without a mail provider.
+        const devCode: string | undefined = j.data?.devCode;
+        if (devCode) {
+          setOtpCode(devCode);
+          toast.info(`وضع التطوير — الرمز: ${devCode}`, { duration: 10_000 });
+        }
+      }
       else toast.error(j.message ?? "فشل الإرسال");
     } catch { toast.error("خطأ في الاتصال"); }
     finally { setLoading(false); }

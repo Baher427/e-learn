@@ -11,7 +11,15 @@ export interface SendEmailInput {
   html: string
 }
 
-export async function sendEmail(input: SendEmailInput): Promise<{ ok: true } | { ok: false; error: string }> {
+export interface SendEmailResult {
+  ok: boolean
+  error?: string
+  /** True when no mail provider is configured and the message was
+   *  only logged to the server console (dev/no-email setups). */
+  devFallback?: boolean
+}
+
+export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
   if (!env.RESEND_API_KEY) {
     // Dev fallback — print to console so you can grab the OTP
     console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
@@ -20,7 +28,7 @@ export async function sendEmail(input: SendEmailInput): Promise<{ ok: true } | {
     console.log('---')
     console.log(input.html.replace(/<[^>]+>/g, ''))
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
-    return { ok: true }
+    return { ok: true, devFallback: true }
   }
 
   try {

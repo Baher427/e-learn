@@ -111,7 +111,14 @@ export function LoginView() {
         toast.success(
           masked ? `تم إرسال الكود إلى: ${masked}` : "تم إرسال كود التحقق إلى بريدك الإلكتروني"
         );
-        setOtpCode("");
+        // Dev/no-email setups: the API returns the code inline so the
+        // flow stays usable without a mail provider. Auto-fill it and
+        // tell the user; production (RESEND_API_KEY) never sees devCode.
+        const devCode: string | undefined = j.data?.devCode;
+        setOtpCode(devCode ?? "");
+        if (devCode) {
+          toast.info(`وضع التطوير — الكود: ${devCode}`, { duration: 10_000 });
+        }
         setOtpStep("verify");
       } else {
         toast.error(j.message ?? "فشل الإرسال");

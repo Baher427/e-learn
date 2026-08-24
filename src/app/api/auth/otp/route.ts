@@ -67,6 +67,12 @@ export async function POST(req: NextRequest) {
     });
     if (!result.ok) return fail(`فشل الإرسال: ${result.error}`, 500);
 
-    return ok({ maskedEmail: maskEmail(email) });
+    return ok({
+      maskedEmail: maskEmail(email),
+      // Only exposed when no mail provider is configured (dev/no-email
+      // setups) — otherwise the OTP is unprintable and the flow would
+      // be unusable. With RESEND_API_KEY set this field never appears.
+      ...(result.devFallback ? { devCode: code } : {}),
+    });
   }, 3, 60_000); // 3 OTPs/min/IP
 }
