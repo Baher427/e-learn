@@ -596,12 +596,12 @@ function EditUserDialog({
             </div>
             <div>
               <Label>المدرّب</Label>
-              <Select value={trainerId} onValueChange={setTrainerId}>
+              <Select value={trainerId || "__none__"} onValueChange={(v) => setTrainerId(v === "__none__" ? "" : v)}>
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="بدون مدرّب" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">بدون مدرّب</SelectItem>
+                  <SelectItem value="__none__">بدون مدرّب</SelectItem>
                   {trainers.map((t) => (
                     <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
                   ))}
