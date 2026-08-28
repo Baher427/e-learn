@@ -3248,3 +3248,26 @@ Stage Summary:
 - ✅ Production now fully on Firebase Firestore (e-learn-8c670); Supabase no longer used at runtime
 - ✅ Zero composite indexes required — db.ts shim keeps every Prisma-style query working on single-field indexes
 - Test accounts on production Firestore: admin/admin123456 (admin), student/student123 (L3, 121 training pts, 134 PVP pts)
+
+---
+Task ID: 21
+Agent: main (Z.ai Code)
+Task: Fix "Unexpected end of JSON input" when a student challenges another player (PVP invite)
+
+Work Log:
+- User reported the error toast when attempting a player-vs-player challenge on the live site
+- Reproduced live: POST /api/pvp/invite send_invite → empty 500; check_incoming was fine
+- Frontend root: postInvite() does res.json() on the empty 500 body → "Unexpected end of JSON input" toast
+- Backend root: src/lib/pvp-config.ts used DEFAULT_TIERS / DEFAULT_AI_CONFIG / TierId / TierConfig WITHOUT importing them from @/lib/pvp → ReferenceError "DEFAULT_TIERS is not defined" at runtime (tsc --noEmit: 12×TS2304, all in this one file). The lobby route has its own local tier loader (imports correct) which is why the lobby worked while send_invite + AI start were broken. Turbopack doesn't type-check and ESLint no-undef is off for TS — that's how it slipped through
+- Fix: added the missing import block to pvp-config.ts; tsc TS2304 count now 0; lint clean
+- Verified against production Firestore: loadTiersFromDb (tier1 q=10 loss=2 status=1 from real SystemSettings), loadAiConfigFromDb (ai_status=1, dailyLimit=5), target/existingActive/myPending queries all pass
+- Committed + pushed → Vercel dpl_4mGyGq3tdtBH36w85D8FNYUnmcQB READY
+- Live API verification (real accounts): send_invite student→baher 200 (matchId, bet=2); 30s timeout → auto-refund ✓; registered testpvp + admin-approved; send_invite → check_incoming sees invite → respond reject → refund ✓; respond accept with 0 points → clean Arabic error "نقاطك غير كافية لقبول الدعوة" + auto-cancel + refund ✓
+- Live UI verification with TWO concurrent agent-browser sessions (student + testpvp): lobby shows both online (lastActivity-based) → challenge dialog (3 tiers with real odds) → confirm → B's invite modal "تحدٍ جديد!" rendered (Radix portal — get text main misses it; inspect [role=dialog]) → B clicked رفض → toast "تم رفض الدعوة" → DB status=rejected → student refunded 186 ✓
+- Cleanup: deleted testpvp user via admin delete_user (cascades its matches)
+
+Stage Summary:
+- ✅ PVP challenge between players fully working end-to-end on production (UI + API): the reported bug is fixed
+- ✅ Same fix un-breaks AI match start (loadAiConfigFromDb had the identical missing-import crash)
+- ✅ Verified paths: send_invite, check_incoming, respond accept/reject, insufficient-points auto-cancel, 30s timeout refund, duplicate-invite guard
+- Deployment: commit "fix(pvp): missing imports in pvp-config crashed send_invite + AI start" → dpl_4mGyGq3tdtBH36w85D8FNYUnmcQB (READY)
