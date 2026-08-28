@@ -115,3 +115,75 @@ export function clientIp(req: Request): string {
     '0.0.0.0'
   )
 }
+
+// --------------------------------------------------------------------
+// Firestore setup-level failure detection (not app bugs)
+// --------------------------------------------------------------------
+
+let saInfoCache: { email: string; projectId: string } | null | undefined
+
+function serviceAccountInfo(): { email: string; projectId: string } | null {
+  if (saInfoCache !== undefined) return saInfoCache
+  try {
+    const raw = process.env.FIREBASE_SERVICE_ACCOUNT
+    if (!raw || !raw.trim().startsWith('{')) {
+      saInfoCache = null
+      return saInfoCache
+    }
+    const parsed = JSON.parse(raw)
+    saInfoCache = {
+      email: parsed.client_email ?? '',
+      projectId: parsed.project_id ?? '',
+    }
+  } catch {
+    saInfoCache = null
+  }
+  return saInfoCache
+}
+
+/**
+ * Detects Firestore *setup* failures and returns a 503 carrying precise
+ * Arabic guidance for the one remaining console step. Returns null when the
+ * error is unrelated to setup (let the caller handle/throw it).
+ *
+ *  Case A — the Firestore database was never created in the project.
+ *  Case B — the database exists but the service account has no IAM role.
+ *  Case C — the FIREBASE_SERVICE_ACCOUNT credential is missing/broken.
+ */
+export function firestoreSetupFail(e: unknown): NextResponse | null {
+  const msg = e instanceof Error ? e.message : String(e)
+  const sa = serviceAccountInfo()
+
+  // Case A must be tested BEFORE Case B: the gRPC "API disabled" error also
+  // contains the word PERMISSION_DENIED.
+  if (
+    /Firestore API has not been used|API is not enabled|SERVICE_DISABLED/i.test(msg)
+  ) {
+    return fail(
+      'قاعدة بيانات Firestore غير مُنشأة بعد في مشروع Firebase. افتح Firebase Console ← Build ← Firestore Database ← Create database ثم أعد المحاولة.',
+      503,
+      { code: 'firestore_setup' }
+    )
+  }
+  if (
+    /Missing or insufficient permissions|caller does not have permission|PERMISSION_DENIED/i.test(
+      msg
+    )
+  ) {
+    const email = sa?.email || 'firebase-adminsdk-fbsvc@e-learn-8c670.iam.gserviceaccount.com'
+    const pid = sa?.projectId || 'e-learn-8c670'
+    return fail(
+      `قاعدة بيانات Firestore جاهزة ✓ وبقيت خطوة أخيرة من جوجل: منح صلاحية الوصول لحساب الخدمة. افتح Google Cloud Console ← IAM & Admin ← Grant Access، أدخل ${email} وامنحه دور «Cloud Datastore Owner» ثم احفظ وأعد المحاولة — الرابط المباشر: https://console.cloud.google.com/iam-admin/iam?project=${pid}`,
+      503,
+      { code: 'firestore_permission' }
+    )
+  }
+  if (/credentials missing|Failed to parse private key|invalid_grant/i.test(msg)) {
+    return fail(
+      'بيانات اعتماد Firebase غير مكتملة على الخادم — تأكد من ضبط متغيّر البيئة FIREBASE_SERVICE_ACCOUNT (ملف JSON لحساب الخدمة كاملاً).',
+      503,
+      { code: 'firestore_credentials' }
+    )
+  }
+  return null
+}

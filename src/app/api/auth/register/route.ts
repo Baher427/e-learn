@@ -11,7 +11,7 @@ import {
   signSession,
   setSessionCookie,
 } from "@/lib/auth";
-import { ok, fail, parseBody, withRatelimit, clientIp } from "@/lib/api";
+import { ok, fail, parseBody, withRatelimit, clientIp, firestoreSetupFail } from "@/lib/api";
 import { z } from "zod";
 
 const schema = z.object({
@@ -36,10 +36,17 @@ export async function POST(req: NextRequest) {
       parsed.data;
 
     // 1. Uniqueness check
-    const exists = await db.user.findFirst({
-      where: { OR: [{ email }, { username }] },
-      select: { id: true },
-    });
+    let exists;
+    try {
+      exists = await db.user.findFirst({
+        where: { OR: [{ email }, { username }] },
+        select: { id: true },
+      });
+    } catch (e) {
+      const setupFail = firestoreSetupFail(e);
+      if (setupFail) return setupFail;
+      throw e;
+    }
     if (exists) return fail("اسم المستخدم أو البريد مسجّل مسبقاً", 409);
 
     // 2. Hash & create

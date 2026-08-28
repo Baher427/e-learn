@@ -673,12 +673,12 @@ class ModelHandle {
     return this.finish(doc, args);
   }
 
-  async findFirst(args: FindArgs) {
+  async findFirst(args: FindArgs = {}) {
     const docs = await this.query(args);
     return docs[0] ?? null;
   }
 
-  async findMany(args: FindArgs) {
+  async findMany(args: FindArgs = {}) {
     return this.query(args);
   }
 
@@ -687,6 +687,42 @@ class ModelHandle {
     let n = 0;
     for (const d of docs) if (await matchesWhere(d, args.where ?? {}, this.model, this.ctx)) n++;
     return n;
+  }
+
+  /**
+   * Prisma-style aggregate over numeric fields.
+   * Supports: _count (true), _sum/_avg/_min/_max ({ field: true }).
+   */
+  async aggregate(args: {
+    where?: Where;
+    _count?: boolean;
+    _sum?: Doc;
+    _avg?: Doc;
+    _min?: Doc;
+    _max?: Doc;
+  } = {}) {
+    const docs = await loadDocs(this.model, args.where ?? {}, {}, this.ctx);
+    const matched: Doc[] = [];
+    for (const d of docs) if (await matchesWhere(d, args.where ?? {}, this.model, this.ctx)) matched.push(d);
+    const result: Doc = {};
+    if (args._count) result._count = matched.length;
+    const ops = ["_sum", "_avg", "_min", "_max"] as const;
+    for (const op of ops) {
+      const fields = args[op];
+      if (!fields) continue;
+      const out: Doc = {};
+      for (const f of Object.keys(fields)) {
+        const vals = matched
+          .map((d) => d[f])
+          .filter((v): v is number => typeof v === "number" && !Number.isNaN(v));
+        if (op === "_sum") out[f] = vals.reduce((a, b) => a + b, 0);
+        else if (op === "_avg") out[f] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+        else if (op === "_min") out[f] = vals.length ? Math.min(...vals) : null;
+        else if (op === "_max") out[f] = vals.length ? Math.max(...vals) : null;
+      }
+      result[op] = out;
+    }
+    return result;
   }
 
   private async query(args: FindArgs): Promise<Doc[]> {

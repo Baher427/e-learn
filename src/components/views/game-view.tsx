@@ -347,7 +347,9 @@ function MathGameInner({
               : settings,
           seed: settings.seed,
           answers: results.map((r) => ({ questionIndex: r.questionIndex, userAnswer: r.userAnswer })),
-          timesMs,
+          // Server caps each question's time at 60s — clamp so a slow
+          // (or idle) player never fails the whole save.
+          timesMs: timesMs.map((t) => Math.min(Math.max(t, 0), 60_000)),
         }),
       });
       const json = await res.json();
