@@ -11,6 +11,12 @@ import { ok, fail, parseBody, withRatelimit, clientIp } from "@/lib/api";
 import { ensureSeeded } from "@/lib/ensure-seed";
 import { z } from "zod";
 
+/** Friendly message when the Firebase project hasn't enabled Firestore yet. */
+function isFirestoreDisabled(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /Firestore API has not been used|API is not enabled|PERMISSION_DENIED/i.test(msg) && /firestore|PERMISSION/i.test(msg);
+}
+
 const schema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
@@ -24,9 +30,20 @@ export async function POST(req: NextRequest) {
     if ("error" in parsed) return parsed.error;
     const { username, password } = parsed.data;
 
-    const user = await db.user.findFirst({
-      where: { OR: [{ username }, { email: username }] },
-    });
+    let user;
+    try {
+      user = await db.user.findFirst({
+        where: { OR: [{ username }, { email: username }] },
+      });
+    } catch (e) {
+      if (isFirestoreDisabled(e)) {
+        return fail(
+          "قاعدة بيانات Firestore غير مفعّلة بعد في مشروع Firebase. افتح Firebase Console ← Build ← Firestore Database ← Create database ثم أعد المحاولة.",
+          503,
+        );
+      }
+      throw e;
+    }
 
     if (!user) return fail("بيانات الدخول غير صحيحة", 401);
     const match = await verifyPassword(password, user.passwordHash);
