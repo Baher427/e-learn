@@ -8,13 +8,19 @@
  * Used for BOTH Firestore (the app database, replacing Supabase Postgres)
  * and FCM push notifications.
  *
+ * The exported `firestore` and `messaging` singletons are LAZY: the Admin
+ * SDK is only initialized on first actual use. `next build` evaluates
+ * route modules while collecting page data — with lazy proxies the build
+ * succeeds even before credentials are present; credentials are then
+ * required at request time only.
+ *
  * Local testing: set FIRESTORE_EMULATOR_HOST (e.g. "127.0.0.1:8080") to
  * run against the Cloud Firestore emulator — the Admin SDK picks it up
  * automatically.
  */
 import { initializeApp, getApps, cert, type App } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
-import { getMessaging } from "firebase-admin/messaging";
+import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import { getMessaging, type Messaging } from "firebase-admin/messaging";
 
 const globalForFirebase = globalThis as unknown as {
   __firebaseApp: App | undefined;
@@ -43,16 +49,38 @@ function buildCredential() {
   return { projectId, clientEmail, privateKey };
 }
 
-export const firebaseApp: App =
-  getApps()[0] ??
-  initializeApp({
-    credential: cert(buildCredential()),
-  });
+function getOrCreateApp(): App {
+  if (globalForFirebase.__firebaseApp) return globalForFirebase.__firebaseApp;
+  const existing = getApps()[0];
+  if (existing) {
+    globalForFirebase.__firebaseApp = existing;
+    return existing;
+  }
+  const app = initializeApp({ credential: cert(buildCredential()) });
+  globalForFirebase.__firebaseApp = app;
+  return app;
+}
 
-if (process.env.NODE_ENV !== "production") globalForFirebase.__firebaseApp = firebaseApp;
+/** Lazy Firestore singleton — initializes on first property access. */
+export const firestore: Firestore = new Proxy({} as Firestore, {
+  get(_target, prop, receiver) {
+    const real = getFirestore(getOrCreateApp()) as unknown as Record<string | symbol, unknown>;
+    const value = real[prop];
+    if (typeof value === "function") {
+      return (value as (...args: unknown[]) => unknown).bind(real);
+    }
+    return value;
+  },
+});
 
-export const firestore = getFirestore(firebaseApp);
-export const messaging = getMessaging(firebaseApp);
-
-// Never choke on undefined properties; matches modern Firestore defaults.
-firestore.settings({ ignoreUndefinedProperties: true });
+/** Lazy Messaging singleton — initializes on first property access. */
+export const messaging: Messaging = new Proxy({} as Messaging, {
+  get(_target, prop, receiver) {
+    const real = getMessaging(getOrCreateApp()) as unknown as Record<string | symbol, unknown>;
+    const value = real[prop];
+    if (typeof value === "function") {
+      return (value as (...args: unknown[]) => unknown).bind(real);
+    }
+    return value;
+  },
+});
