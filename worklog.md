@@ -3222,3 +3222,29 @@ Work Log:
 Stage Summary:
 - All prep done; waiting ONLY for owner to grant `firebase-adminsdk-fbsvc@e-learn-8c670.iam.gserviceaccount.com` role "Cloud Datastore Owner" (roles/datastore.owner) via IAM → Grant Access
 - After grant: probe → run migration → verify live site E2E (login/admin/student) → clean file-mode changes
+
+---
+Task ID: 20
+Agent: main (Z.ai Code)
+Task: Firebase migration completion — IAM granted, data migrated, composite-index bug fixed, full E2E verification
+
+Work Log:
+- User granted Cloud Datastore Owner to firebase-adminsdk-fbsvc@e-learn-8c670.iam.gserviceaccount.com in Google Cloud IAM
+- Firestore probe: CONNECTED (0 users — empty database awaiting migration)
+- Ran src/scripts/migrate-supabase-to-firestore.ts against production Firestore with real Supabase pooler URLs: users:8 trainers:1 settings:25 notifications:1 reads:1 trainings:3 exams:0 pvpMatches:4 friendships:1 withdrawals:2 activity:42 audits:10 — ALL migrated ✓
+- Post-migration live API tests found TWO 500s: /api/leaderboard and /api/pvp/lobby (get_lobby_data)
+- Root cause reproduced standalone: Firestore FAILED_PRECONDITION "The query requires an index" — eq+eq+range pattern (status+role+totalPoints{gt} / pvpPoints{gt}) requires a composite index; shim pushed all three down
+- Fixed src/lib/db.ts pushableConstraints: range pushes down ONLY when lone constraint (single-field index); eq+range combos keep equalities pushed + range in memory (inMemory flag forces full where re-check in loadDocs); document id() never pushed down (not a stored field — where("id") silently matched nothing — now filters in memory)
+- Verified 10/10 query patterns against production Firestore (leaderboard count, lobby rank, lobby online id:not+range, lone range, eq-only, findMany-by-id, date gte+lte, contains, full leaderboard route simulation)
+- Committed 5d8ea83 + pushed → Vercel dpl_2Hc68k9xKxB4peJz1FJiaY4CARNp READY
+- Live re-verify: leaderboard 200 (student #1 121pts, real users), lobby 200 (PVP leaderboard student 134 / baher 59 / biro 55)
+- Full agent-browser E2E on production: admin login + all 7 views (users table real rows w/ trainer أ. أحمد محمد, withdrawals 50→1 approved + 60→1.2 rejected real requests, stats 3 trainings, arena, notifications, exams); student login + dashboard (121/134 real points), PVP arena (AI 5/5, daily bonus, leaders/friends/leaderboard/history/wallet tabs — Radix tabs switch via keyboard, mouse-click interception is a Playwright artifact), wallet (134 pts, 50:1 rate, real history), notifications (migrated broadcast read)
+- Training E2E: addition_subtraction full cycle (start → sequential display → answer → confirm → question 2 advance → stop → حفظ وخروج) — verified written to production Firestore (trainings count 3→4, new doc addition_subtraction 2026-08-28T19:29:43Z)
+- Mobile 375×812: no horizontal scroll, sticky footer (footerTop 706/812); Desktop 1440×900: no overflow, footer bottom=viewport; zero console/page errors all session
+- Reverted stale file-mode-only git changes
+
+Stage Summary:
+- ✅ Firebase migration 100% COMPLETE: IAM granted → data migrated → index bug fixed → deployed (5d8ea83) → live-verified end-to-end
+- ✅ Production now fully on Firebase Firestore (e-learn-8c670); Supabase no longer used at runtime
+- ✅ Zero composite indexes required — db.ts shim keeps every Prisma-style query working on single-field indexes
+- Test accounts on production Firestore: admin/admin123456 (admin), student/student123 (L3, 121 training pts, 134 PVP pts)
