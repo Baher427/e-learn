@@ -4,6 +4,12 @@
  * pull the DB (firebase-admin) into the browser bundle.
  */
 import { db } from '@/lib/db'
+import {
+  DEFAULT_AI_CONFIG,
+  DEFAULT_TIERS,
+  type TierConfig,
+  type TierId,
+} from '@/lib/pvp'
 
 /**
  * Loads the merged AI config (defaults + admin overrides from SystemSetting).
