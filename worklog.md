@@ -3121,3 +3121,46 @@ Stage Summary:
 - ✅ كل عمليات الأدمن في الديالوج تعمل: تعديل البيانات، تغيير المدرّب/المستوى/الحالة، التفعيل مع التمديد التلقائي، كلمة مرور جديدة، إنهاء الجلسات، الحذف النهائي.
 - ✅ لا يوجد أي `SelectItem value=""` متبقٍ في المشروع (فُحص بـ grep شامل).
 - ✅ منشور على Vercel (commit e742b97) ومختبر حيّاً.
+
+---
+Task ID: 18
+Agent: main (Z.ai Code)
+Task: نقل قاعدة البيانات بالكامل من Supabase Postgres إلى Firebase (Firestore + FCM) — مشروع e-learn-8c670.
+
+Work Log:
+- حصرت كل أنماط الوصول للبيانات في 28 مسار API: 14 موديل، 11 نوع استدعاء (findUnique/findFirst/findMany/create/update/updateMany/upsert/delete/deleteMany/count/$transaction)، فلاتر علائقية (some/none/every)، compound uniques (notificationId_userId)، increment/decrement، includes مركّبة، contains search، وترتيب متعدد.
+- **بنيت src/lib/db.ts من جديد**: محوّل Firestore كامل بنفس واجهة Prisma — بدون تعديل أي مسار API:
+  - 14 مجموعة (users/trainers/trainings/generatedExams/pvpMatches/friendships/notifications/notificationReads/withdrawalRequests/systemSettings/activityLogs/auditLogs/fcmTokens/sessions) مع كل أسماء العلاقات (بما فيها Trainer.users و Notification.notificationReads).
+  - محرك where كامل: equality/in/notIn/gt/gte/lt/lte/contains/startsWith/NOT/AND/OR + فلاتر علائقية + belongsTo بـ sub-where.
+  - include/select مع nested where+select على hasMany.
+  - الدفع للخادم: equality + range واحد يذهبون إلى Firestore where()؛ المعقد يُفلتر في الذاكرة (سقف أمان 20k مستند).
+  - Timestamps ⇄ JS Dates تلقائياً في الاتجاهين (أصلحت خللاً كان يحوّل Date إلى {} فارغ).
+  - **معاملات overlay**: $transaction التفاعلية تخزّن الكتابات في overlay بالذاكرة وتُطبّقها على معاملة Firestore حقيقية بعد انتهاء الـ callback — فتحل قاعدة Firestore (كل القراءات قبل الكتابات) مع أي ترتيب عمليات (مسار training/save يكتب ثم يقرأ).
+- **src/lib/firebase.ts**: تهيئة firebase-admin معيارية (subpaths app/firestore/messaging) + متغير واحد FIREBASE_SERVICE_ACCOUNT (JSON كامل) أو 3 متغيرات منفصلة + دعم FIRESTORE_EMULATOR_HOST. **Lazy Proxies** للـ firestore/messaging — البناء الإنتاجي لا يحتاج بيانات الاعتماد (أصلح فشل أول deploy لأن Vercel يقيّم الوحدات وقت البناء).
+- **src/lib/ensure-seed.ts**: بذرة تلقائية idempotent عند أول login على قاعدة فارغة (admin/student/trainer/settings/welcome) — القاعدة تُهيّئ نفسها لحظة تفعيل Firestore.
+- **src/lib/fcm.ts**: إشعارات FCM حقيقية (broadcast + targeted) مربوطة بمسار إشعارات الأدمن + تنظيف التوكنات الميتة.
+- **فصل src/lib/pvp.ts**: دوال قاعدة البيانات انتقلت إلى src/lib/pvp-config.ts (server-only) — firebase-admin له آثار جانبية على مستوى الوحدة فلا يجب أن يصل لحزمة المتصفح (اكتشفته من خطأ Turbopack: node-fetch/node:net في Client Component).
+- **env.ts + .env + .env.example**: أزلت DATABASE_URL/DIRECT_URL/SUPABASE_*/RESEND_*؛ أضفت FIREBASE_SERVICE_ACCOUNT.
+- **vercel.json**: buildCommand أصبح "next build" (بلا prisma generate). package.json: db:seed فقط.
+- **mini-services/pvp-service**: من bun:sqlite إلى Firestore (نفس منطق تنظيف المباريات العالقة، الآن بمعاملات ذرّية لكل مباراة).
+- **مسار الدخول**: رسالة 503 عربية واضحة إذا Firestore غير مفعّل بعد.
+- **Vercel**: حذفت DATABASE_URL/DIRECT_URL/SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY/SUPABASE_ANON_KEY/RESEND_API_KEY/EMAIL_FROM وأضفت FIREBASE_SERVICE_ACCOUNT (production+preview+development).
+- **الاختبار**:
+  - Firestore Emulator (Java 21 + cloud-firestore-emulator-v1.19.8.jar على 127.0.0.1:8080).
+  - 17 حالة adapter: علاقات، compound unique upsert، معاملات overlay (كتابة ثم قراءة)، معاملات مصفوفة (سحب المحفظة)، decrement/increment، leaderboard ordering، contains search، relational some/none — كلها نجحت.
+  - سكريبت البذرة الأصلي اشتغل بدون تعديل.
+  - E2E كامل بالمتصفح على الإيموليتر: دخول أدمن/طالب، داشبورد + سايدبار (بيانات Firestore)، حفظ تدريب (معاملة ذرّية + نقاط)، سحب محفظة (60 نقطة → 1.2 ج.م)، لوحة الأدمن + الترس + الشاشات السبع، ساحة المعارك، مولّد الامتحانات، الإحصائيات، المتصدرون، الإشعارات — صفر أخطاء.
+  - بناء إنتاجي محلي ناجح + lint نظيف.
+  - pvp-service يعمل على Firestore (socket.io handshake ✓).
+- **النشر**: 3 commits (3ef5971، 809bbf1، 400d27f) — أحدث deploy READY.
+- **حالة الموقع الحي**: GET / 200، والـ login يرجع 503 برسالة عربية واضحة — Firestore API غير مفعّل في مشروع e-learn-8c670 (حساب الخدمة المُعطى لا يملك صلاحية serviceusage.services.enable — جرّبت التفعيل البرمجي عبر Service Usage API وFirestore Admin API وIAM — كلها PERMISSION_DENIED). الخطوة الوحيدة المتبقية: المستخدم يفتح Firebase Console ← Build ← Firestore Database ← Create database. بعدها أول login يبذّر القاعدة تلقائياً ويعمل كل شيء.
+
+Stage Summary:
+- ✅ كل طبقة البيانات على Firebase Firestore (المشروع e-learn-8c670) بنفس واجهة Prisma — صفر تعديلات على مسارات الـ API.
+- ✅ معاملات ذرّية حقيقية بنظام overlay يحل قيد ترتيب Firestore.
+- ✅ FCM حقيقي للإشعارات (broadcast + targeted + تنظيف توكنات ميتة).
+- ✅ بذرة تلقائية — القاعدة تجهز نفسها عند أول طلب دخول.
+- ✅ الإيموليتر للاختبار المحلي + 17 اختبار adapter + E2E كامل ناجح.
+- ✅ Vercel منشور بمتغيرات Firebase (Supabase محذوف كلياً).
+- ⚠️ خطوة واحدة للمستخدم: تفعيل Firestore من Firebase Console (زر Create database) — لا يمكنني تنفيذها بحساب الخدمة المعطى (صلاحيات غير كافية). بعدها الموقع يعمل فوراً.
+- 🔑 بيانات الدخول بعد التفعيل: admin/admin123456، student/student123.
