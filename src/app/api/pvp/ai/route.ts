@@ -32,9 +32,9 @@ import {
   botSpeedForLevel,
   computeBotScore,
   encodeQuestionsJson,
-  loadAiConfigFromDb,
   todayKey,
 } from '@/lib/pvp'
+import { loadAiConfigFromDb } from '@/lib/pvp-config'
 import { generateBatch, GameSettings, scoreAttempt, AnswerRecord } from '@/lib/game'
 import { nanoid } from 'nanoid'
 import { z } from 'zod'

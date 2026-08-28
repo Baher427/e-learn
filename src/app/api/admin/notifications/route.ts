@@ -12,6 +12,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { ok, fail, requireAdmin, parseBody } from "@/lib/api";
 import { audit } from "@/lib/audit";
+import { pushBroadcast, pushToUser } from "@/lib/fcm";
 import { z } from "zod";
 
 const PAGE_SIZE = 15;
@@ -127,6 +128,8 @@ export async function POST(req: NextRequest) {
           isBroadcast: false,
         },
       });
+      // FCM push to the targeted student's devices (best-effort).
+      pushToUser(args.targetUserId, { title: args.title, body: args.message }).catch(() => {});
       await audit({
         actorId: adminId,
         targetUserId: args.targetUserId,
@@ -144,6 +147,8 @@ export async function POST(req: NextRequest) {
         isBroadcast: true,
       },
     });
+    // FCM push to every registered device (best-effort).
+    pushBroadcast({ title: args.title, body: args.message }).catch(() => {});
     await audit({
       actorId: adminId,
       action: "send_broadcast_notification",

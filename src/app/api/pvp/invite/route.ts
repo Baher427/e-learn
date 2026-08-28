@@ -33,8 +33,8 @@ import {
   StoredQuestion,
   TierId,
   encodeQuestionsJson,
-  loadTiersFromDb,
 } from '@/lib/pvp'
+import { loadTiersFromDb } from '@/lib/pvp-config'
 import { generateBatch, GameSettings } from '@/lib/game'
 import { nanoid } from 'nanoid'
 import { z } from 'zod'

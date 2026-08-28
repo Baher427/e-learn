@@ -66,3 +66,6 @@ agent-ctx/
 /agent-ctx/
 /.zscripts/
 /start-dev.sh
+db/
+.emulator/
+test-fb*

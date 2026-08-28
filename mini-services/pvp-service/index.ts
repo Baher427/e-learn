@@ -9,30 +9,64 @@
  * Path-requirement: the Caddy gateway forwards `/?XTransformPort=3003` to this port.
  * We MUST keep socket.io's `path: "/"` so the gateway routes correctly.
  *
- * DB access uses `bun:sqlite` (built into Bun) — no Prisma needed. The DB file
- * is the same SQLite file the Next.js app uses (`/home/z/my-project/db/custom.db`).
+ * DB access: Firebase Firestore via firebase-admin (same database as the
+ * Next.js app). Credentials come from the FIREBASE_SERVICE_ACCOUNT env var
+ * in /home/z/my-project/.env (falls back to the Firestore emulator via
+ * FIRESTORE_EMULATOR_HOST for local testing).
  *
  * Auto-restart: `bun --hot index.ts` watches this file and reloads on change.
  */
 import { createServer } from 'http'
 import { Server } from 'socket.io'
-import { Database } from 'bun:sqlite'
+import { readFileSync } from 'fs'
 
 // --------------------------------------------------------------------
 // Config
 // --------------------------------------------------------------------
 const PORT = 3003
-const DB_PATH = '/home/z/my-project/db/custom.db'
 const ONLINE_TTL_MS = 15_000 // a user is "online" if last_activity < now - 15s
 const STUCK_PENDING_MS = 60_000 // a pending match older than 60s is considered stuck
 const CLEANUP_INTERVAL_MS = 30_000
 
 // --------------------------------------------------------------------
-// SQLite (read-write, safe WAL for concurrent access with the Next app)
+// Firebase Firestore (same DB as the Next.js app)
 // --------------------------------------------------------------------
-const db = new Database(DB_PATH)
-db.exec('PRAGMA journal_mode = WAL')
-db.exec('PRAGMA foreign_keys = ON')
+function loadEnv() {
+  try {
+    const raw = readFileSync('/home/z/my-project/.env', 'utf8')
+    for (const line of raw.split('\n')) {
+      const m = line.match(/^([A-Z_]+)=(.*)$/)
+      if (m && !process.env[m[1]]) {
+        let val = m[2].trim()
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1)
+        }
+        process.env[m[1]] = val
+      }
+    }
+  } catch { /* .env optional */ }
+}
+loadEnv()
+
+const firebaseAdmin = await import('firebase-admin/app')
+const firestoreMod = await import('firebase-admin/firestore')
+const { getApps, initializeApp, cert } = firebaseAdmin as any
+const { getFirestore, Timestamp } = firestoreMod as any
+
+if (getApps().length === 0) {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT
+  if (raw && raw.trim().startsWith('{')) {
+    const sa = JSON.parse(raw)
+    initializeApp({ credential: cert({ projectId: sa.project_id, clientEmail: sa.client_email, privateKey: sa.private_key }) })
+  } else {
+    initializeApp({ credential: cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    }) })
+  }
+}
+const db = getFirestore()
 
 // --------------------------------------------------------------------
 // HTTP server + socket.io
@@ -69,42 +103,40 @@ function emitLobbyPresence() {
 // --------------------------------------------------------------------
 // Stuck-match cleanup (off-request-path cron)
 // --------------------------------------------------------------------
-function cleanupStuckMatches() {
+async function cleanupStuckMatches() {
   try {
-    const cutoff = new Date(Date.now() - STUCK_PENDING_MS).toISOString()
-    const stuck = db
-      .query(
-        `SELECT id, player1Id, betAmount FROM PvpMatch
-         WHERE status = 'pending' AND createdAt < ?`
-      )
-      .all(cutoff) as Array<{ id: string; player1Id: string; betAmount: number }>
+    const cutoff = Timestamp.fromDate(new Date(Date.now() - STUCK_PENDING_MS))
+    const stuckSnap = await db
+      .collection('pvpMatches')
+      .where('status', '==', 'pending')
+      .where('createdAt', '<', cutoff)
+      .limit(200)
+      .get()
+    if (stuckSnap.empty) return
 
-    if (stuck.length === 0) return
-
-    const refundStmt = db.prepare(
-      `UPDATE User SET pvpPoints = pvpPoints + ? WHERE id = ?`
-    )
-    const cancelStmt = db.prepare(
-      `UPDATE PvpMatch SET status = 'cancelled', updatedAt = ? WHERE id = ?`
-    )
-    const idleStmt = db.prepare(
-      `UPDATE User SET currentStatus = 'idle' WHERE id = ?`
-    )
-
-    for (const m of stuck) {
-      const tx = db.transaction(() => {
-        refundStmt.run(m.betAmount, m.player1Id)
-        cancelStmt.run(new Date().toISOString(), m.id)
-        idleStmt.run(m.player1Id)
+    for (const docSnap of stuckSnap.docs) {
+      const m = docSnap.data() as { player1Id: string; betAmount: number }
+      // Atomic per match: refund + cancel + idle.
+      await db.runTransaction(async (tx) => {
+        const userRef = db.collection('users').doc(m.player1Id)
+        const matchRef = db.collection('pvpMatches').doc(docSnap.id)
+        const [userDoc, matchDoc] = await Promise.all([tx.get(userRef), tx.get(matchRef)])
+        if (!matchDoc.exists) return
+        const match = matchDoc.data()!
+        if (match.status !== 'pending') return // already handled
+        tx.update(userRef, {
+          pvpPoints: (userDoc.data()?.pvpPoints ?? 0) + (m.betAmount ?? 0),
+          currentStatus: 'idle',
+        })
+        tx.update(matchRef, { status: 'cancelled', updatedAt: Timestamp.now() })
       })
-      tx()
       // notify the sender (if connected) that the match timed out
       io.to(`user_${m.player1Id}`).emit('invite_response', {
-        matchId: m.id,
+        matchId: docSnap.id,
         response: 'timeout',
       })
     }
-    console.log(`[cleanup] cancelled ${stuck.length} stuck pending matches`)
+    console.log(`[cleanup] cancelled ${stuckSnap.size} stuck pending matches`)
   } catch (err) {
     console.error('[cleanup] error:', err)
   }
@@ -243,7 +275,6 @@ const shutdown = (sig: string) => {
   console.log(`\n[${sig}] shutting down pvp-service...`)
   io.close()
   httpServer.close(() => {
-    db.close()
     process.exit(0)
   })
 }

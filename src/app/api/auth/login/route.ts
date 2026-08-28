@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { verifyPassword, signSession, setSessionCookie } from "@/lib/auth";
 import { ok, fail, parseBody, withRatelimit, clientIp } from "@/lib/api";
+import { ensureSeeded } from "@/lib/ensure-seed";
 import { z } from "zod";
 
 const schema = z.object({
@@ -17,6 +18,8 @@ const schema = z.object({
 
 export async function POST(req: NextRequest) {
   return withRatelimit(`login:${clientIp(req)}`, async () => {
+    // Self-bootstrap an empty database (no-op once seeded).
+    await ensureSeeded().catch(() => {});
     const parsed = await parseBody(req, schema);
     if ("error" in parsed) return parsed.error;
     const { username, password } = parsed.data;
