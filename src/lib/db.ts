@@ -504,15 +504,34 @@ async function getRaw(model: ModelKey, id: string, ctx: Ctx): Promise<Doc | null
   return snap.exists ? snapToDoc(snap) : null;
 }
 
-/** Extract pushable flat constraints (equality on primitives + one range field). */
-function pushableConstraints(model: ModelKey, where: Where): { eqs: [string, unknown][]; range?: { field: string; op: FirebaseFirestore.WhereFilterOp; value: unknown } } {
+/**
+ * Extract pushable flat constraints.
+ *
+ * Firestore index rules (the crucial part):
+ *  - equalities only            → single-field indexes, always works
+ *  - ONE range, no equalities   → single-field index, works
+ *  - equalities + a range       → COMPOSITE INDEX required (fails at runtime!)
+ *  - 2+ ranges                  → COMPOSITE INDEX required
+ *
+ * So a range is pushed down ONLY when it is the lone constraint; whenever a
+ * range coexists with equalities the equalities still push down and the range
+ * is applied in memory (`inMemory: true` forces the full where re-check).
+ * Document `id` is not a stored field, so it can never be pushed down — it
+ * stays in memory too.
+ */
+function pushableConstraints(model: ModelKey, where: Where): { eqs: [string, unknown][]; range?: { field: string; op: FirebaseFirestore.WhereFilterOp; value: unknown }; inMemory?: boolean } {
   const eqs: [string, unknown][] = [];
-  let range: { field: string; op: FirebaseFirestore.WhereFilterOp; value: unknown } | undefined;
+  const ranges: { field: string; op: FirebaseFirestore.WhereFilterOp; value: unknown }[] = [];
+  let inMemory = false;
+  const opMap: Record<string, FirebaseFirestore.WhereFilterOp> = {
+    gt: ">", gte: ">=", lt: "<", lte: "<=",
+  };
   for (const [key, cond] of Object.entries(where ?? {})) {
-    if (["AND", "OR", "NOT"].includes(key)) return { eqs: [] };
-    if (MODELS[model].relations[key]) return { eqs: [] }; // relation filters stay in memory
-    if (key === "id" && (cond === null || typeof cond !== "object")) {
-      eqs.push([key, cond]);
+    if (["AND", "OR", "NOT"].includes(key)) return { eqs: [], inMemory: true };
+    if (MODELS[model].relations[key]) return { eqs: [], inMemory: true }; // relation filters stay in memory
+    if (key === "id") {
+      // `id` is not a stored field — where("id"…) would silently match nothing.
+      inMemory = true;
       continue;
     }
     if (cond === null || typeof cond !== "object" || cond instanceof Date) {
@@ -521,20 +540,20 @@ function pushableConstraints(model: ModelKey, where: Where): { eqs: [string, unk
     }
     const ops = Object.keys(cond as Doc);
     if (ops.length === 1 && NUMERIC_OPS.has(ops[0])) {
-      if (range) return { eqs: [] }; // only one range field supported
-      const opMap: Record<string, FirebaseFirestore.WhereFilterOp> = {
-        gt: ">", gte: ">=", lt: "<", lte: "<=",
-      };
-      range = { field: key, op: opMap[ops[0]], value: asComparable((cond as Doc)[ops[0]]) };
+      ranges.push({ field: key, op: opMap[ops[0]], value: asComparable((cond as Doc)[ops[0]]) });
       continue;
     }
-    return { eqs: [] }; // in / contains / multi-op → in-memory
+    return { eqs: [], inMemory: true }; // in / contains / multi-op → in-memory
   }
-  return { eqs, range };
+  if (ranges.length === 1 && eqs.length === 0 && !inMemory) {
+    return { eqs, range: ranges[0] };
+  }
+  if (ranges.length > 0) inMemory = true; // eq+range / multi-range → range stays in memory
+  return { eqs, inMemory };
 }
 
 async function loadDocs(model: ModelKey, where: Where, opts: { orderBy?: Doc | Doc[]; limit?: number }, ctx: Ctx): Promise<Doc[]> {
-  const { eqs, range } = pushableConstraints(model, where);
+  const { eqs, range, inMemory: rangeInMemory } = pushableConstraints(model, where);
   let q: FirebaseFirestore.Query = firestore.collection(col(model));
 
   const isComplex = Object.entries(where ?? {}).some(([k, v]) =>
@@ -564,8 +583,9 @@ async function loadDocs(model: ModelKey, where: Where, opts: { orderBy?: Doc | D
   }
 
   // Apply the full where in memory whenever anything non-trivial is present
-  // (when only flat equalities were pushed down Firestore already filtered).
-  if (isComplex) {
+  // (when only flat equalities were pushed down Firestore already filtered),
+  // or when a range / id constraint was deliberately kept in memory.
+  if (isComplex || rangeInMemory) {
     const out: Doc[] = [];
     for (const d of docs) {
       if (await matchesWhere(d, where, model, ctx)) out.push(d);
